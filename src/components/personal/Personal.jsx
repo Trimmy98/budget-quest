@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useBudget, useIncome } from '../../hooks/useExpenses'
-import { getMonthGrade, getCurrentMonth } from '../../lib/constants'
+import { getMonthGrade, getCurrentMonth, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
 import ProgressBar from '../shared/ProgressBar'
 
@@ -18,7 +18,7 @@ export default function Personal({ selectedMonth }) {
   const [simCut, setSimCut] = useState(0)
   const [simExtra, setSimExtra] = useState(0)
 
-  const personalCategories = budget?.personal_categories || []
+  const personalCategories = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
   const myPersonalExpenses = expenses.filter(e => e.user_id === user?.id && e.expense_type === 'personal')
   const memberCount = 1 // personal section shows individual
 

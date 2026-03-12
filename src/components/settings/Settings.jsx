@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useBudget, useIncome } from '../../hooks/useExpenses'
 import { useCurrency } from '../../hooks/useCurrency'
-import { getCurrentMonth } from '../../lib/constants'
+import { getCurrentMonth, DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 
 export default function Settings({ selectedMonth, onMonthChange }) {
   const { user, profile, household, refreshProfile } = useAuth()
@@ -69,10 +69,10 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   }, [profile])
 
   useEffect(() => {
-    if (budget) {
-      setSharedCats(budget.shared_categories || [])
-      setPersonalCats(budget.personal_categories || [])
-    }
+    const sc = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
+    const pc = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
+    setSharedCats(sc)
+    setPersonalCats(pc)
   }, [budget])
 
   async function fetchMembers() {
