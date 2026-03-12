@@ -66,7 +66,7 @@ export default function AddExpense({ onExpenseAdded }) {
           user_id: user.id,
           month,
           amount: parsed,
-        })
+        }, { onConflict: 'user_id,month' })
         if (incErr) throw incErr
 
         await awardXP(10)
