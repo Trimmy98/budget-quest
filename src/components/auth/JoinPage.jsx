@@ -9,6 +9,7 @@ export default function JoinPage() {
   const navigate = useNavigate()
   const [status, setStatus] = useState('loading')
   const [household, setHousehold] = useState(null)
+  const [switching, setSwitching] = useState(false)
 
   useEffect(() => {
     async function handleJoin() {
@@ -22,57 +23,27 @@ export default function JoinPage() {
         setHousehold(hh)
 
         if (!user) {
-          // Store invite code and redirect to auth
           sessionStorage.setItem('pending_invite', code)
           navigate('/?invite=' + code)
           return
         }
 
-        if (profile?.household_id) {
-          setStatus('already_member')
+        // Already in THIS household
+        if (profile?.household_id === hh.id) {
+          setStatus('same_household')
           return
         }
 
-        const { count } = await supabase
-          .from('profiles')
-          .select('*', { count: 'exact', head: true })
-          .eq('household_id', hh.id)
-        if (count >= hh.max_members) throw new Error('Hushållet är fullt')
-
-        // Check if profile exists
-        const { data: existingProfile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', user.id)
-          .single()
-
-        if (existingProfile) {
-          // Update existing profile
-          await supabase.from('profiles').update({
-            household_id: hh.id,
-            role: 'member',
-            onboarding_complete: true,
-          }).eq('id', user.id)
-        } else {
-          // Create new profile with all required fields
-          await supabase.from('profiles').insert({
-            id: user.id,
-            display_name: user.email?.split('@')[0] || 'Medlem',
-            household_id: hh.id,
-            role: 'member',
-            onboarding_complete: true,
-          })
+        // Already in a DIFFERENT household - ask to switch
+        if (profile?.household_id) {
+          setStatus('ask_switch')
+          return
         }
 
-        await supabase.from('gamification').upsert({
-          user_id: user.id,
-          household_id: hh.id,
-        }, { onConflict: 'user_id' })
-
-        await refreshProfile()
-        setStatus('joined')
-        setTimeout(() => navigate('/'), 2000)
+        // No household yet - join directly
+        await joinHousehold(hh)
       } catch (err) {
+        console.error('Join error:', err)
         setStatus('error')
       }
     }
@@ -80,14 +51,61 @@ export default function JoinPage() {
     handleJoin()
   }, [code, user])
 
-  const statusMessages = {
-    loading: { text: 'Laddar...', color: '#00f0ff' },
-    joined: { text: `Du har gått med i ${household?.name}! 🎉`, color: '#00ff87' },
-    already_member: { text: 'Du är redan med i ett hushåll', color: '#ffd93d' },
-    error: { text: 'Ogiltig eller utgången länk', color: '#ff6b6b' },
+  async function joinHousehold(hh) {
+    const targetHousehold = hh || household
+    if (!targetHousehold) return
+
+    try {
+      const { count } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .eq('household_id', targetHousehold.id)
+      if (count >= targetHousehold.max_members) {
+        setStatus('full')
+        return
+      }
+
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+
+      if (existingProfile) {
+        await supabase.from('profiles').update({
+          household_id: targetHousehold.id,
+          role: 'member',
+          onboarding_complete: true,
+        }).eq('id', user.id)
+      } else {
+        await supabase.from('profiles').insert({
+          id: user.id,
+          display_name: user.email?.split('@')[0] || 'Medlem',
+          household_id: targetHousehold.id,
+          role: 'member',
+          onboarding_complete: true,
+        })
+      }
+
+      await supabase.from('gamification').upsert({
+        user_id: user.id,
+        household_id: targetHousehold.id,
+      }, { onConflict: 'user_id' })
+
+      await refreshProfile()
+      setStatus('joined')
+      setTimeout(() => navigate('/'), 2000)
+    } catch (err) {
+      console.error('Join error:', err)
+      setStatus('error')
+    }
   }
 
-  const msg = statusMessages[status]
+  async function handleSwitch() {
+    setSwitching(true)
+    await joinHousehold(household)
+    setSwitching(false)
+  }
 
   return (
     <div style={{
@@ -98,20 +116,198 @@ export default function JoinPage() {
       justifyContent: 'center',
       flexDirection: 'column',
       gap: 16,
+      padding: 24,
     }}>
-      <div style={{
-        fontFamily: 'Orbitron, sans-serif',
-        fontSize: 24,
-        color: msg?.color,
-        textShadow: `0 0 20px ${msg?.color}80`,
-        textAlign: 'center',
-        padding: '0 24px',
-      }}>
-        {msg?.text}
-      </div>
-      {status === 'joined' && (
-        <div style={{ color: '#64748b', fontSize: 14 }}>Omdirigerar...</div>
+      {status === 'loading' && (
+        <div style={{
+          fontFamily: 'Orbitron, sans-serif',
+          fontSize: 20,
+          color: '#00f0ff',
+          textShadow: '0 0 20px rgba(0,240,255,0.8)',
+          animation: 'pulse 1.5s ease-in-out infinite',
+        }}>
+          Laddar...
+        </div>
       )}
+
+      {status === 'joined' && (
+        <>
+          <div style={{ fontSize: 48 }}>🎉</div>
+          <div style={{
+            fontFamily: 'Orbitron, sans-serif',
+            fontSize: 20,
+            color: '#00ff87',
+            textShadow: '0 0 20px rgba(0,255,135,0.8)',
+            textAlign: 'center',
+          }}>
+            Du har gått med i {household?.name}!
+          </div>
+          <div style={{ color: '#64748b', fontSize: 14 }}>Omdirigerar...</div>
+        </>
+      )}
+
+      {status === 'same_household' && (
+        <>
+          <div style={{ fontSize: 48 }}>👋</div>
+          <div style={{
+            fontFamily: 'Orbitron, sans-serif',
+            fontSize: 18,
+            color: '#00f0ff',
+            textAlign: 'center',
+          }}>
+            Du är redan med i {household?.name}!
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              background: 'linear-gradient(135deg, #00f0ff, #0080ff)',
+              border: 'none',
+              borderRadius: 12,
+              padding: '14px 32px',
+              color: '#020617',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: 'pointer',
+              marginTop: 8,
+            }}
+          >
+            Gå till appen
+          </button>
+        </>
+      )}
+
+      {status === 'ask_switch' && (
+        <div style={{
+          background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+          border: '1px solid #1e293b',
+          borderRadius: 20,
+          padding: 24,
+          maxWidth: 400,
+          width: '100%',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🏠</div>
+          <div style={{
+            fontFamily: 'Orbitron, sans-serif',
+            fontSize: 18,
+            color: '#e2e8f0',
+            marginBottom: 8,
+          }}>
+            Byta hushåll?
+          </div>
+          <div style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5, marginBottom: 20 }}>
+            Du är redan med i ett hushåll. Vill du lämna det och gå med i <strong style={{ color: '#00f0ff' }}>{household?.name}</strong> istället?
+          </div>
+          <button
+            onClick={handleSwitch}
+            disabled={switching}
+            style={{
+              width: '100%',
+              background: 'linear-gradient(135deg, #00ff87, #00cc6a)',
+              border: 'none',
+              borderRadius: 12,
+              padding: '14px 0',
+              color: '#020617',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: 'pointer',
+              boxShadow: '0 0 20px rgba(0,255,135,0.3)',
+              opacity: switching ? 0.7 : 1,
+              marginBottom: 10,
+            }}
+          >
+            {switching ? 'Byter...' : `Ja, gå med i ${household?.name}`}
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              width: '100%',
+              background: 'transparent',
+              border: '1px solid #1e293b',
+              borderRadius: 12,
+              padding: '14px 0',
+              color: '#64748b',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 600,
+              fontSize: 15,
+              cursor: 'pointer',
+            }}
+          >
+            Nej, stanna kvar
+          </button>
+        </div>
+      )}
+
+      {status === 'full' && (
+        <>
+          <div style={{ fontSize: 48 }}>😕</div>
+          <div style={{
+            fontFamily: 'Orbitron, sans-serif',
+            fontSize: 18,
+            color: '#ffd93d',
+            textAlign: 'center',
+          }}>
+            Hushållet är fullt
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+              border: '1px solid #1e293b',
+              borderRadius: 12,
+              padding: '14px 32px',
+              color: '#94a3b8',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 600,
+              fontSize: 15,
+              cursor: 'pointer',
+              marginTop: 8,
+            }}
+          >
+            Tillbaka
+          </button>
+        </>
+      )}
+
+      {status === 'error' && (
+        <>
+          <div style={{ fontSize: 48 }}>❌</div>
+          <div style={{
+            fontFamily: 'Orbitron, sans-serif',
+            fontSize: 18,
+            color: '#ff6b6b',
+            textAlign: 'center',
+          }}>
+            Ogiltig eller utgången länk
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+              border: '1px solid #1e293b',
+              borderRadius: 12,
+              padding: '14px 32px',
+              color: '#94a3b8',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 600,
+              fontSize: 15,
+              cursor: 'pointer',
+              marginTop: 8,
+            }}
+          >
+            Tillbaka
+          </button>
+        </>
+      )}
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+      `}</style>
     </div>
   )
 }
