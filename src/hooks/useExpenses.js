@@ -93,7 +93,7 @@ export function useIncome(month) {
     setAllIncome(data || [])
   }
 
-  const myIncome = allIncome.find(i => i.user_id === user?.id)?.amount || 0
+  const myIncome = allIncome.filter(i => i.user_id === user?.id).reduce((sum, i) => sum + Number(i.amount), 0)
   const totalIncome = allIncome.reduce((sum, i) => sum + Number(i.amount), 0)
 
   return { allIncome, myIncome, totalIncome, refetch: fetchIncome }

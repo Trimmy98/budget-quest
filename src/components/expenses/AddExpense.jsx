@@ -59,18 +59,19 @@ export default function AddExpense({ onExpenseAdded }) {
 
     try {
       if (expenseType === 'income') {
-        // Save/update income for current month
+        // Insert new income entry for current month
         const month = getCurrentMonth()
-        const { error: incErr } = await supabase.from('income').upsert({
+        const { error: incErr } = await supabase.from('income').insert({
           household_id: profile.household_id,
           user_id: user.id,
           month,
           amount: parsed,
-        }, { onConflict: 'user_id,month' })
+          description: description || null,
+        })
         if (incErr) throw incErr
 
         await awardXP(10)
-        setSuccess(`Inkomst ${parsed.toFixed(0)} ${symbol} sparad!`)
+        setSuccess(`Inkomst ${parsed.toFixed(0)} ${symbol} tillagd!`)
         setAmount('')
         setDescription('')
         if (onExpenseAdded) onExpenseAdded()
@@ -247,7 +248,7 @@ export default function AddExpense({ onExpenseAdded }) {
           color: '#94a3b8',
           lineHeight: 1.5,
         }}>
-          💡 Ange din månadsinkomst efter skatt. Uppdateras för <strong style={{ color: '#ffd93d' }}>{getCurrentMonth()}</strong>.
+          💡 Lägg till inkomster för <strong style={{ color: '#ffd93d' }}>{getCurrentMonth()}</strong>. Du kan lägga till flera (lön, sidoinkomst, etc).
         </div>
       )}
 
@@ -300,29 +301,27 @@ export default function AddExpense({ onExpenseAdded }) {
         </div>
       )}
 
-      {/* Description - only for expenses */}
-      {expenseType !== 'income' && (
-        <input
-          type="text"
-          placeholder="Beskrivning (valfritt)"
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          style={{
-            width: '100%',
-            background: '#0b1120',
-            border: '1px solid #1e293b',
-            borderRadius: 12,
-            padding: '12px 16px',
-            color: '#e2e8f0',
-            fontFamily: 'Outfit, sans-serif',
-            fontSize: 14,
-            outline: 'none',
-            marginBottom: 20,
-          }}
-          onFocus={e => e.target.style.borderColor = '#00f0ff'}
-          onBlur={e => e.target.style.borderColor = '#1e293b'}
-        />
-      )}
+      {/* Description */}
+      <input
+        type="text"
+        placeholder={expenseType === 'income' ? 'T.ex. Lön, freelance, bonus...' : 'Beskrivning (valfritt)'}
+        value={description}
+        onChange={e => setDescription(e.target.value)}
+        style={{
+          width: '100%',
+          background: '#0b1120',
+          border: '1px solid #1e293b',
+          borderRadius: 12,
+          padding: '12px 16px',
+          color: '#e2e8f0',
+          fontFamily: 'Outfit, sans-serif',
+          fontSize: 14,
+          outline: 'none',
+          marginBottom: 20,
+        }}
+        onFocus={e => e.target.style.borderColor = expenseType === 'income' ? '#ffd93d' : '#00f0ff'}
+        onBlur={e => e.target.style.borderColor = '#1e293b'}
+      />
 
       {error && (
         <div style={{
