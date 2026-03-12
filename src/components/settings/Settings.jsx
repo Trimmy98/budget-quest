@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
-import { useBudget } from '../../hooks/useExpenses'
+import { useBudget, useIncome } from '../../hooks/useExpenses'
+import { useCurrency } from '../../hooks/useCurrency'
 import { getCurrentMonth } from '../../lib/constants'
 
 export default function Settings({ selectedMonth, onMonthChange }) {
   const { user, profile, household, refreshProfile } = useAuth()
   const { budget, refetch: refetchBudget } = useBudget()
+  const { myIncome } = useIncome(selectedMonth)
+  const { currency, symbol, setCurrency, currencies } = useCurrency()
   const [members, setMembers] = useState([])
   const [copied, setCopied] = useState(false)
   const [editingShared, setEditingShared] = useState(false)
@@ -15,6 +18,49 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   const [personalCats, setPersonalCats] = useState([])
   const [saving, setSaving] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
+
+  // Subscriptions
+  const [subscriptions, setSubscriptions] = useState([])
+  const [showAddSub, setShowAddSub] = useState(false)
+  const [newSub, setNewSub] = useState({ name: '', amount: '', frequency: 'monthly' })
+
+  useEffect(() => {
+    if (user?.id) {
+      const stored = localStorage.getItem(`subs_${user.id}`)
+      if (stored) setSubscriptions(JSON.parse(stored))
+    }
+  }, [user])
+
+  function saveSubs(subs) {
+    setSubscriptions(subs)
+    if (user?.id) localStorage.setItem(`subs_${user.id}`, JSON.stringify(subs))
+  }
+
+  function addSubscription() {
+    if (!newSub.name || !newSub.amount) return
+    const sub = {
+      id: Date.now(),
+      name: newSub.name,
+      amount: parseFloat(newSub.amount),
+      frequency: newSub.frequency,
+    }
+    saveSubs([...subscriptions, sub])
+    setNewSub({ name: '', amount: '', frequency: 'monthly' })
+    setShowAddSub(false)
+  }
+
+  function removeSubscription(id) {
+    saveSubs(subscriptions.filter(s => s.id !== id))
+  }
+
+  const monthlySubTotal = subscriptions.reduce((sum, s) => {
+    if (s.frequency === 'yearly') return sum + s.amount / 12
+    if (s.frequency === 'quarterly') return sum + s.amount / 3
+    if (s.frequency === 'weekly') return sum + s.amount * 4.33
+    return sum + s.amount
+  }, 0)
+  const yearlySubTotal = monthlySubTotal * 12
+  const subPercentOfIncome = myIncome > 0 ? Math.min((monthlySubTotal / myIncome) * 100, 999) : 0
 
   const isAdmin = profile?.role === 'admin'
 
@@ -138,6 +184,46 @@ export default function Settings({ selectedMonth, onMonthChange }) {
             <option key={m} value={m}>{m} {m === getCurrentMonth() ? '(nuvarande)' : ''}</option>
           ))}
         </select>
+      </div>
+
+      {/* Currency Selector */}
+      <div style={sectionStyle}>
+        <div style={labelStyle}>💱 VALUTA</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {currencies.map(c => (
+            <button
+              key={c.code}
+              onClick={() => setCurrency(c.code)}
+              style={{
+                background: currency === c.code
+                  ? 'linear-gradient(135deg, rgba(0,240,255,0.2), rgba(0,240,255,0.1))'
+                  : '#0b1120',
+                border: `1px solid ${currency === c.code ? '#00f0ff' : '#1e293b'}`,
+                borderRadius: 10,
+                padding: '10px 6px',
+                cursor: 'pointer',
+                textAlign: 'center',
+                boxShadow: currency === c.code ? '0 0 10px rgba(0,240,255,0.2)' : 'none',
+              }}
+            >
+              <div style={{
+                fontFamily: 'Orbitron, sans-serif',
+                fontSize: 16,
+                fontWeight: 700,
+                color: currency === c.code ? '#00f0ff' : '#64748b',
+              }}>
+                {c.symbol}
+              </div>
+              <div style={{
+                fontSize: 10,
+                color: currency === c.code ? '#00f0ff' : '#475569',
+                marginTop: 2,
+              }}>
+                {c.code}
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Household Info */}
@@ -295,10 +381,11 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                   <span style={{ flex: 1, fontSize: 12, color: '#94a3b8' }}>{cat.name}</span>
                   <input
                     type="number"
+                    min="0"
                     value={sharedCats[i].budget}
                     onChange={e => {
                       const updated = [...sharedCats]
-                      updated[i] = { ...updated[i], budget: parseFloat(e.target.value) || 0 }
+                      updated[i] = { ...updated[i], budget: Math.max(0, parseFloat(e.target.value) || 0) }
                       setSharedCats(updated)
                     }}
                     style={{
@@ -314,7 +401,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                       textAlign: 'right',
                     }}
                   />
-                  <span style={{ fontSize: 11, color: '#64748b' }}>€</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>{symbol}</span>
                 </div>
               ))}
               <button
@@ -342,7 +429,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
               {sharedCats.map(cat => (
                 <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
                   <span style={{ fontSize: 12, color: '#94a3b8' }}>{cat.icon} {cat.name}</span>
-                  <span style={{ fontSize: 12, fontFamily: 'Orbitron, sans-serif', color: '#00f0ff' }}>{cat.budget}€</span>
+                  <span style={{ fontSize: 12, fontFamily: 'Orbitron, sans-serif', color: '#00f0ff' }}>{cat.budget}{symbol}</span>
                 </div>
               ))}
             </div>
@@ -378,10 +465,11 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                 <span style={{ flex: 1, fontSize: 12, color: '#94a3b8' }}>{cat.name}</span>
                 <input
                   type="number"
+                  min="0"
                   value={personalCats[i].budget}
                   onChange={e => {
                     const updated = [...personalCats]
-                    updated[i] = { ...updated[i], budget: parseFloat(e.target.value) || 0 }
+                    updated[i] = { ...updated[i], budget: Math.max(0, parseFloat(e.target.value) || 0) }
                     setPersonalCats(updated)
                   }}
                   style={{
@@ -397,7 +485,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                     textAlign: 'right',
                   }}
                 />
-                <span style={{ fontSize: 11, color: '#64748b' }}>€</span>
+                <span style={{ fontSize: 11, color: '#64748b' }}>{symbol}</span>
               </div>
             ))}
             <button
@@ -425,9 +513,209 @@ export default function Settings({ selectedMonth, onMonthChange }) {
             {personalCats.map(cat => (
               <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
                 <span style={{ fontSize: 12, color: '#94a3b8' }}>{cat.icon} {cat.name}</span>
-                <span style={{ fontSize: 12, fontFamily: 'Orbitron, sans-serif', color: '#00ff87' }}>{cat.budget}€</span>
+                <span style={{ fontSize: 12, fontFamily: 'Orbitron, sans-serif', color: '#00ff87' }}>{cat.budget}{symbol}</span>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Subscription Scanner */}
+      <div style={sectionStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={labelStyle}>🔄 PRENUMERATIONER</div>
+          <button
+            onClick={() => setShowAddSub(!showAddSub)}
+            style={{
+              background: 'rgba(255,121,198,0.1)',
+              border: '1px solid rgba(255,121,198,0.3)',
+              borderRadius: 8,
+              padding: '4px 12px',
+              color: '#ff79c6',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontFamily: 'Outfit, sans-serif',
+            }}
+          >
+            {showAddSub ? 'Avbryt' : '+ Lägg till'}
+          </button>
+        </div>
+
+        {/* Summary stats */}
+        {subscriptions.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            {[
+              { label: 'Per månad', value: `${monthlySubTotal.toFixed(0)}${symbol}`, color: '#ff79c6' },
+              { label: 'Per år', value: `${yearlySubTotal.toFixed(0)}${symbol}`, color: '#ffd93d' },
+              { label: 'Av inkomst', value: myIncome > 0 ? `${subPercentOfIncome.toFixed(1)}%` : '–', color: subPercentOfIncome > 15 ? '#ff6b6b' : '#00ff87' },
+            ].map(s => (
+              <div key={s.label} style={{
+                flex: 1,
+                background: '#0b1120',
+                borderRadius: 10,
+                padding: '8px 6px',
+                textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 9, color: '#64748b', marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add new subscription form */}
+        {showAddSub && (
+          <div style={{
+            background: '#0b1120',
+            borderRadius: 12,
+            padding: 12,
+            marginBottom: 12,
+          }}>
+            <input
+              type="text"
+              placeholder="Namn (t.ex. Netflix, Spotify...)"
+              value={newSub.name}
+              onChange={e => setNewSub({ ...newSub, name: e.target.value })}
+              style={{
+                width: '100%',
+                background: '#020617',
+                border: '1px solid #1e293b',
+                borderRadius: 8,
+                padding: '10px 12px',
+                color: '#e2e8f0',
+                fontFamily: 'Outfit, sans-serif',
+                fontSize: 13,
+                outline: 'none',
+                marginBottom: 8,
+              }}
+              onFocus={e => e.target.style.borderColor = '#ff79c6'}
+              onBlur={e => e.target.style.borderColor = '#1e293b'}
+            />
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <input
+                type="number"
+                placeholder="Belopp"
+                value={newSub.amount}
+                onChange={e => setNewSub({ ...newSub, amount: e.target.value })}
+                style={{
+                  flex: 1,
+                  background: '#020617',
+                  border: '1px solid #1e293b',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  color: '#e2e8f0',
+                  fontFamily: 'Orbitron, sans-serif',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
+                onFocus={e => e.target.style.borderColor = '#ff79c6'}
+                onBlur={e => e.target.style.borderColor = '#1e293b'}
+              />
+              <select
+                value={newSub.frequency}
+                onChange={e => setNewSub({ ...newSub, frequency: e.target.value })}
+                style={{
+                  background: '#020617',
+                  border: '1px solid #1e293b',
+                  borderRadius: 8,
+                  padding: '10px 8px',
+                  color: '#e2e8f0',
+                  fontFamily: 'Outfit, sans-serif',
+                  fontSize: 12,
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="weekly">Veckovis</option>
+                <option value="monthly">Månadsvis</option>
+                <option value="quarterly">Kvartalsvis</option>
+                <option value="yearly">Årsvis</option>
+              </select>
+            </div>
+            <button
+              onClick={addSubscription}
+              disabled={!newSub.name || !newSub.amount}
+              style={{
+                width: '100%',
+                background: 'linear-gradient(135deg, #ff79c6, #ff5599)',
+                border: 'none',
+                borderRadius: 8,
+                padding: '10px 0',
+                color: '#020617',
+                fontFamily: 'Outfit, sans-serif',
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: 'pointer',
+                opacity: !newSub.name || !newSub.amount ? 0.5 : 1,
+              }}
+            >
+              Lägg till prenumeration
+            </button>
+          </div>
+        )}
+
+        {/* Subscription list */}
+        {subscriptions.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: '12px 0' }}>
+            Inga prenumerationer tillagda ännu. Lägg till dina för att se hur mycket de kostar!
+          </div>
+        ) : (
+          subscriptions.map(sub => {
+            const freqLabel = { weekly: '/vecka', monthly: '/mån', quarterly: '/kvartal', yearly: '/år' }[sub.frequency]
+            const monthlyAmount = sub.frequency === 'yearly' ? sub.amount / 12
+              : sub.frequency === 'quarterly' ? sub.amount / 3
+              : sub.frequency === 'weekly' ? sub.amount * 4.33
+              : sub.amount
+            return (
+              <div key={sub.id} style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 0',
+                borderBottom: '1px solid #1e293b',
+              }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{sub.name}</div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>
+                    {sub.amount}{symbol} {freqLabel}
+                    {sub.frequency !== 'monthly' && (
+                      <span style={{ color: '#ff79c6' }}> ({monthlyAmount.toFixed(0)}{symbol}/mån)</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeSubscription(sub.id)}
+                  style={{
+                    background: 'rgba(255,107,107,0.1)',
+                    border: '1px solid rgba(255,107,107,0.3)',
+                    borderRadius: 8,
+                    padding: '4px 10px',
+                    color: '#ff6b6b',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    fontFamily: 'Outfit, sans-serif',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )
+          })
+        )}
+
+        {/* Warning if subscriptions are high */}
+        {subPercentOfIncome > 15 && myIncome > 0 && (
+          <div style={{
+            marginTop: 12,
+            background: 'rgba(255,107,107,0.08)',
+            border: '1px solid rgba(255,107,107,0.2)',
+            borderRadius: 10,
+            padding: 10,
+            fontSize: 12,
+            color: '#ff6b6b',
+            lineHeight: 1.4,
+          }}>
+            ⚠️ Dina prenumerationer tar {subPercentOfIncome.toFixed(0)}% av din inkomst. Experter rekommenderar max 10-15%.
           </div>
         )}
       </div>

@@ -24,7 +24,7 @@ export function useGamification() {
     if (data) {
       setAllGamification(data)
       const mine = data.find(g => g.user_id === user.id)
-      setGamification(mine || null)
+      setGamification(mine || { xp: 0, streak_current: 0, streak_best: 0, achievements: [] })
     }
   }
 

@@ -3,11 +3,14 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useBudget } from '../../hooks/useExpenses'
 import { useGamification } from '../../hooks/useGamification'
+import { useCurrency } from '../../hooks/useCurrency'
+import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 
 export default function AddExpense({ onExpenseAdded }) {
   const { user, profile } = useAuth()
   const { budget } = useBudget()
   const { awardXP, updateStreak, checkExpenseCount } = useGamification()
+  const { symbol } = useCurrency()
 
   const [expenseType, setExpenseType] = useState('shared')
   const [amount, setAmount] = useState('')
@@ -16,16 +19,17 @@ export default function AddExpense({ onExpenseAdded }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const categories = expenseType === 'shared'
-    ? (budget?.shared_categories || [])
-    : (budget?.personal_categories || [])
+  const sharedCats = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
+  const personalCats = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
+  const categories = expenseType === 'shared' ? sharedCats : personalCats
 
   async function handleSubmit() {
     if (!amount || !category) {
       setError('Fyll i belopp och kategori')
       return
     }
-    if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+    const parsedAmount = parseFloat(amount)
+    if (isNaN(parsedAmount) || parsedAmount <= 0 || !isFinite(parsedAmount)) {
       setError('Ogiltigt belopp')
       return
     }
@@ -39,7 +43,7 @@ export default function AddExpense({ onExpenseAdded }) {
         household_id: profile.household_id,
         user_id: user.id,
         date: today,
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         description,
         category,
         expense_type: expenseType,
@@ -128,11 +132,13 @@ export default function AddExpense({ onExpenseAdded }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="number"
+            aria-label="Belopp"
             value={amount}
             onChange={e => setAmount(e.target.value)}
             placeholder="0.00"
             style={{
               flex: 1,
+              minWidth: 0,
               background: 'transparent',
               border: 'none',
               outline: 'none',
@@ -148,7 +154,8 @@ export default function AddExpense({ onExpenseAdded }) {
             fontFamily: 'Orbitron, sans-serif',
             fontSize: 20,
             color: '#64748b',
-          }}>€</span>
+            flexShrink: 0,
+          }}>{symbol}</span>
         </div>
       </div>
 
@@ -172,7 +179,8 @@ export default function AddExpense({ onExpenseAdded }) {
                   ? expenseType === 'shared' ? '#ff79c6' : '#00ff87'
                   : '#1e293b'}`,
                 borderRadius: 12,
-                padding: '10px 8px',
+                padding: '14px 8px',
+                minHeight: 44,
                 cursor: 'pointer',
                 transition: 'all 0.2s',
                 boxShadow: category === cat.id
@@ -248,7 +256,7 @@ export default function AddExpense({ onExpenseAdded }) {
           border: 'none',
           borderRadius: 14,
           padding: '16px 0',
-          color: !amount || !category ? '#64748b' : '#020617',
+          color: !amount || !category ? '#94a3b8' : '#020617',
           fontFamily: 'Outfit, sans-serif',
           fontWeight: 700,
           fontSize: 16,

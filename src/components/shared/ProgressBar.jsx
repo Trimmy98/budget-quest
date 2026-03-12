@@ -1,7 +1,7 @@
 import React from 'react'
 
 export default function ProgressBar({ value, max, color = '#00f0ff', height = 6, showLabel = false, label = '' }) {
-  const pct = max > 0 ? Math.min(value / max, 1) : 0
+  const pct = max > 0 ? Math.max(0, Math.min(value / max, 1)) : 0
   const isOver = value > max
   const displayColor = isOver ? '#ff6b6b' : color
 

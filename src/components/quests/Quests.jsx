@@ -3,10 +3,12 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useIncome } from '../../hooks/useExpenses'
 import { QUEST_MILESTONES, getMonthGrade, getCurrentMonth } from '../../lib/constants'
+import { useCurrency } from '../../hooks/useCurrency'
 import ProgressBar from '../shared/ProgressBar'
 
 export default function Quests({ selectedMonth }) {
   const { user, profile } = useAuth()
+  const { symbol } = useCurrency()
   const { expenses } = useExpenses(selectedMonth)
   const { allIncome, myIncome } = useIncome(selectedMonth)
   const [members, setMembers] = useState([])
@@ -165,7 +167,7 @@ export default function Quests({ selectedMonth }) {
                       fontSize: 12,
                       color: isReached ? '#00ff87' : '#64748b',
                     }}>
-                      {milestone.amount.toLocaleString()}€
+                      {milestone.amount.toLocaleString()}{symbol}
                     </span>
                   </div>
                   {isNext && (
@@ -237,7 +239,7 @@ export default function Quests({ selectedMonth }) {
                 fontSize: 14,
                 color: memberSaved >= 0 ? '#00ff87' : '#ff6b6b',
               }}>
-                {memberSaved >= 0 ? '+' : ''}{memberSaved.toFixed(0)}€
+                {memberSaved >= 0 ? '+' : ''}{memberSaved.toFixed(0)}{symbol}
               </div>
             </div>
           )
@@ -287,7 +289,7 @@ export default function Quests({ selectedMonth }) {
               fontSize: 12,
               color: mh.saved >= 0 ? '#00ff87' : '#ff6b6b',
             }}>
-              {mh.saved >= 0 ? '+' : ''}{mh.saved.toFixed(0)}€
+              {mh.saved >= 0 ? '+' : ''}{mh.saved.toFixed(0)}{symbol}
             </div>
           </div>
         ))}

@@ -16,12 +16,19 @@ import Personal from './components/personal/Personal'
 import Quests from './components/quests/Quests'
 import Achievements from './components/achievements/Achievements'
 import Settings from './components/settings/Settings'
+import Mascot from './components/shared/Mascot'
+import { useExpenses, useBudget, useIncome } from './hooks/useExpenses'
+import { useCurrency } from './hooks/useCurrency'
 
 function AppContent() {
   const { user, profile, loading } = useAuth()
   const [activeTab, setActiveTab] = useState('dashboard')
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth())
   const { gamification, allGamification, fetchGamification } = useGamification()
+  const { expenses } = useExpenses(selectedMonth)
+  const { budget } = useBudget()
+  const { myIncome } = useIncome(selectedMonth)
+  const { symbol } = useCurrency()
   const location = useLocation()
 
   // Get invite code from URL query param
@@ -120,6 +127,18 @@ function AppContent() {
     }
   }
 
+  // Mascot data
+  const myExpenses = expenses.filter(e => e.user_id === user?.id)
+  const memberCount = new Set(expenses.map(e => e.user_id)).size || 1
+  const sharedTotal = expenses.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0) / memberCount
+  const personalTotal = myExpenses.filter(e => e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
+  const mascotSavingsRate = myIncome > 0 ? (myIncome - sharedTotal - personalTotal) / myIncome : 0
+  const daysInMonth = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate()
+  const daysLeft = daysInMonth - new Date().getDate() + 1
+  const remainingBudget = (budget?.shared_categories || []).reduce((s, c) => s + c.budget, 0) / memberCount +
+    (budget?.personal_categories || []).reduce((s, c) => s + c.budget, 0) - sharedTotal - personalTotal
+  const mascotPerDay = daysLeft > 0 ? remainingBudget / daysLeft : 0
+
   return (
     <div style={{
       maxWidth: 480,
@@ -130,10 +149,17 @@ function AppContent() {
       background: '#020617',
     }}>
       <Header gamification={gamification} />
-      <main style={{ flex: 1, overflowY: 'auto' }}>
+      <main style={{ flex: 1, overflowY: 'auto', paddingBottom: 70 }}>
         {renderTab()}
       </main>
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <Mascot
+        savingsRate={mascotSavingsRate}
+        streak={gamification?.streak_current || 0}
+        expenseCount={myExpenses.length}
+        perDay={mascotPerDay}
+        symbol={symbol}
+      />
     </div>
   )
 }

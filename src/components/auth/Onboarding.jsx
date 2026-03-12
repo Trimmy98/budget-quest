@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES, WEEKLY_CHALLENGES } from '../../lib/constants'
+import { useCurrency } from '../../hooks/useCurrency'
 
 const styles = {
   container: {
@@ -164,6 +165,7 @@ const TOTAL_STEPS = 5
 
 export default function Onboarding({ inviteCode, pendingInviteCode }) {
   const { user, refreshProfile } = useAuth()
+  const { symbol } = useCurrency()
   const [step, setStep] = useState(1)
   const [displayName, setDisplayName] = useState('')
   const [householdChoice, setHouseholdChoice] = useState(null)
@@ -500,7 +502,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
               onChange={e => setIncome(e.target.value)}
               autoFocus
             />
-            <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>€ per månad</div>
+            <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>{symbol} per månad</div>
             <button style={styles.btn} onClick={handleSaveIncome} disabled={loading}>
               {loading ? 'Sparar...' : 'Spara →'}
             </button>
@@ -523,7 +525,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
               onChange={e => setIncome(e.target.value)}
               autoFocus
             />
-            <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>€ per månad</div>
+            <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>{symbol} per månad</div>
             <button style={styles.btn} onClick={handleSaveIncome} disabled={loading}>
               {loading ? 'Sparar...' : 'Nästa →'}
             </button>
