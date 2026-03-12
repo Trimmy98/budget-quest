@@ -159,6 +159,73 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
         ))}
       </div>
 
+      {/* Budget Tracker - how's the month going */}
+      {myIncome > 0 && (() => {
+        const totalBudget = (budget?.shared_categories || []).reduce((s, c) => s + c.budget, 0) / memberCount +
+          (budget?.personal_categories || []).reduce((s, c) => s + c.budget, 0)
+        const totalSpentSoFar = myShareOfShared + myPersonalTotal
+        const dayProgress = currentDay / daysInMonth
+        const budgetProgress = totalBudget > 0 ? totalSpentSoFar / totalBudget : 0
+        const onTrack = budgetProgress <= dayProgress + 0.05 // 5% margin
+
+        return (
+          <div style={{
+            background: '#0f172a',
+            border: `1px solid ${onTrack ? 'rgba(0,255,135,0.3)' : 'rgba(255,107,107,0.3)'}`,
+            borderRadius: 20,
+            padding: 16,
+            marginBottom: 12,
+          }}>
+            <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 10 }}>
+              BUDGETKOLL
+            </div>
+
+            {/* Time vs Spending comparison */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>Tid i månaden</span>
+                <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'Orbitron, sans-serif' }}>
+                  Dag {currentDay}/{daysInMonth} ({(dayProgress * 100).toFixed(0)}%)
+                </span>
+              </div>
+              <ProgressBar value={dayProgress} max={1} color="#64748b" height={4} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>Spenderat av budget</span>
+                <span style={{
+                  fontSize: 11,
+                  fontFamily: 'Orbitron, sans-serif',
+                  color: onTrack ? '#00ff87' : '#ff6b6b',
+                }}>
+                  {totalSpentSoFar.toFixed(0)}/{totalBudget.toFixed(0)}{symbol} ({(budgetProgress * 100).toFixed(0)}%)
+                </span>
+              </div>
+              <ProgressBar value={budgetProgress} max={1} color={onTrack ? '#00ff87' : '#ff6b6b'} height={4} />
+            </div>
+
+            {/* Status message */}
+            <div style={{
+              textAlign: 'center',
+              fontSize: 12,
+              color: onTrack ? '#00ff87' : '#ff6b6b',
+              fontWeight: 600,
+              padding: '6px 0 0',
+              borderTop: '1px solid #1e293b',
+            }}>
+              {onTrack
+                ? budgetProgress < dayProgress * 0.7
+                  ? '🎯 Du ligger riktigt bra till!'
+                  : '✅ Du ligger bra i fas med budgeten'
+                : budgetProgress > 0.9
+                  ? '🚨 Budgeten är nästan slut!'
+                  : '⚠️ Du ligger lite före – sakta ner!'}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Monthly Grade */}
       <div style={{
         background: `linear-gradient(135deg, ${gradeColor}15, ${gradeColor}05)`,

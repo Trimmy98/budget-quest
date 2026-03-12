@@ -5,7 +5,7 @@ const tabs = [
   { id: 'add', icon: '➕', label: 'Logga' },
   { id: 'personal', icon: '👤', label: 'Personligt' },
   { id: 'quests', icon: '🗺️', label: 'Sparande' },
-  { id: 'achievements', icon: '🏆', label: 'Badges' },
+  { id: 'history', icon: '📈', label: 'Historik' },
   { id: 'settings', icon: '⚙️', label: 'Mer' },
 ]
 

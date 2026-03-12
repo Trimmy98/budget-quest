@@ -15,6 +15,7 @@ import AddExpense from './components/expenses/AddExpense'
 import Personal from './components/personal/Personal'
 import Quests from './components/quests/Quests'
 import Achievements from './components/achievements/Achievements'
+import History from './components/history/History'
 import Settings from './components/settings/Settings'
 import Mascot from './components/shared/Mascot'
 import { useExpenses, useBudget, useIncome } from './hooks/useExpenses'
@@ -113,8 +114,8 @@ function AppContent() {
         return <Personal selectedMonth={selectedMonth} />
       case 'quests':
         return <Quests selectedMonth={selectedMonth} />
-      case 'achievements':
-        return <Achievements gamification={gamification} />
+      case 'history':
+        return <History gamification={gamification} selectedMonth={selectedMonth} />
       case 'settings':
         return (
           <Settings
