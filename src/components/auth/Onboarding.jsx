@@ -313,10 +313,11 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
   async function handleFinish() {
     setLoading(true)
     try {
-      await supabase.from('profiles').upsert({
-        id: user.id,
-        onboarding_complete: true,
-      })
+      const { error } = await supabase
+        .from('profiles')
+        .update({ onboarding_complete: true })
+        .eq('id', user.id)
+      if (error) throw error
       await refreshProfile()
     } catch (err) {
       setError(err.message)
