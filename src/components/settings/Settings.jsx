@@ -226,70 +226,87 @@ export default function Settings({ selectedMonth, onMonthChange }) {
         </div>
       </div>
 
-      {/* Household Info */}
+      {/* Invite Banner - always visible and prominent */}
       {household && (
-        <div style={sectionStyle}>
-          <div style={labelStyle}>🏠 HUSHÅLLSINFO</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>
-            {household.name}
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(0,240,255,0.12), rgba(0,240,255,0.04))',
+          border: '1px solid rgba(0,240,255,0.3)',
+          borderRadius: 20,
+          padding: 16,
+          marginBottom: 12,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 32 }}>🏠</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>
+                {household.name}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {members.length}/{household.max_members} medlemmar
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
-            {members.length}/{household.max_members} medlemmar
-          </div>
+
+          <button
+            onClick={copyInviteLink}
+            style={{
+              width: '100%',
+              background: copied
+                ? 'linear-gradient(135deg, #00ff87, #00cc6a)'
+                : 'linear-gradient(135deg, #00f0ff, #0080ff)',
+              border: 'none',
+              borderRadius: 12,
+              padding: '14px 0',
+              color: '#020617',
+              fontFamily: 'Outfit, sans-serif',
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: 'pointer',
+              boxShadow: '0 0 20px rgba(0,240,255,0.3)',
+              transition: 'all 0.2s',
+              marginBottom: 8,
+            }}
+          >
+            {copied ? '✓ Länk kopierad!' : '📨 Bjud in till hushållet'}
+          </button>
+
           <div style={{
             background: '#0b1120',
-            border: '1px solid rgba(0,240,255,0.2)',
-            borderRadius: 10,
-            padding: 12,
-            marginBottom: 10,
+            borderRadius: 8,
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
           }}>
-            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>Inbjudningslänk:</div>
             <div style={{
-              fontFamily: 'Orbitron, sans-serif',
-              fontSize: 11,
-              color: '#00f0ff',
+              flex: 1,
+              fontFamily: 'monospace',
+              fontSize: 10,
+              color: '#64748b',
               wordBreak: 'break-all',
-              marginBottom: 8,
+              lineHeight: 1.4,
             }}>
               {inviteLink}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            {isAdmin && (
               <button
-                onClick={copyInviteLink}
+                onClick={regenerateInviteCode}
+                disabled={regenerating}
                 style={{
-                  flex: 1,
-                  background: 'rgba(0,240,255,0.1)',
-                  border: '1px solid rgba(0,240,255,0.3)',
+                  background: 'rgba(255,107,107,0.1)',
+                  border: '1px solid rgba(255,107,107,0.3)',
                   borderRadius: 8,
-                  padding: '8px 0',
-                  color: '#00f0ff',
+                  padding: '6px 10px',
+                  color: '#ff6b6b',
                   cursor: 'pointer',
-                  fontSize: 12,
+                  fontSize: 11,
                   fontFamily: 'Outfit, sans-serif',
-                  fontWeight: 600,
+                  flexShrink: 0,
                 }}
               >
-                {copied ? '✓ Kopierad!' : '📋 Kopiera'}
+                {regenerating ? '...' : '🔄 Ny kod'}
               </button>
-              {isAdmin && (
-                <button
-                  onClick={regenerateInviteCode}
-                  disabled={regenerating}
-                  style={{
-                    background: 'rgba(255,107,107,0.1)',
-                    border: '1px solid rgba(255,107,107,0.3)',
-                    borderRadius: 8,
-                    padding: '8px 12px',
-                    color: '#ff6b6b',
-                    cursor: 'pointer',
-                    fontSize: 12,
-                    fontFamily: 'Outfit, sans-serif',
-                  }}
-                >
-                  {regenerating ? '...' : '🔄'}
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}
