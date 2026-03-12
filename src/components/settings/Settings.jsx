@@ -27,13 +27,61 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   useEffect(() => {
     if (user?.id) {
       const stored = localStorage.getItem(`subs_${user.id}`)
-      if (stored) setSubscriptions(JSON.parse(stored))
+      if (stored) {
+        const subs = JSON.parse(stored)
+        setSubscriptions(subs)
+        autoLogSubscriptions(subs)
+      }
     }
-  }, [user])
+  }, [user, profile])
 
   function saveSubs(subs) {
     setSubscriptions(subs)
     if (user?.id) localStorage.setItem(`subs_${user.id}`, JSON.stringify(subs))
+  }
+
+  function getMonthlyAmount(sub) {
+    if (sub.frequency === 'yearly') return sub.amount / 12
+    if (sub.frequency === 'quarterly') return sub.amount / 3
+    if (sub.frequency === 'weekly') return sub.amount * 4.33
+    return sub.amount
+  }
+
+  async function autoLogSubscriptions(subs) {
+    if (!profile?.household_id || !user?.id || subs.length === 0) return
+    const month = getCurrentMonth()
+    const logKey = `subs_logged_${user.id}_${month}`
+    if (localStorage.getItem(logKey)) return
+
+    const firstOfMonth = `${month}-01`
+    for (const sub of subs) {
+      const monthly = getMonthlyAmount(sub)
+      await supabase.from('expenses').insert({
+        household_id: profile.household_id,
+        user_id: user.id,
+        date: firstOfMonth,
+        amount: Math.round(monthly * 100) / 100,
+        description: `${sub.name} (prenumeration)`,
+        category: 'misc',
+        expense_type: 'personal',
+      })
+    }
+    localStorage.setItem(logKey, 'true')
+  }
+
+  async function logSubscriptionAsExpense(sub) {
+    if (!profile?.household_id || !user?.id) return
+    const today = new Date().toISOString().split('T')[0]
+    const monthly = getMonthlyAmount(sub)
+    await supabase.from('expenses').insert({
+      household_id: profile.household_id,
+      user_id: user.id,
+      date: today,
+      amount: Math.round(monthly * 100) / 100,
+      description: `${sub.name} (prenumeration)`,
+      category: 'misc',
+      expense_type: 'personal',
+    })
   }
 
   function addSubscription() {
@@ -45,6 +93,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
       frequency: newSub.frequency,
     }
     saveSubs([...subscriptions, sub])
+    logSubscriptionAsExpense(sub)
     setNewSub({ name: '', amount: '', frequency: 'monthly' })
     setShowAddSub(false)
   }
