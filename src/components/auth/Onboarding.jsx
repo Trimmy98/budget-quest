@@ -153,13 +153,20 @@ const styles = {
   },
 }
 
+// Helper: get the real authenticated user id directly from Supabase,
+// bypassing React state which can be stale after AbortError / lock issues.
+async function getAuthUid() {
+  const { data: { session } } = await supabase.auth.getSession()
+  return session?.user?.id ?? null
+}
+
 const TOTAL_STEPS = 5
 
 export default function Onboarding({ inviteCode, pendingInviteCode }) {
   const { user, refreshProfile } = useAuth()
   const [step, setStep] = useState(1)
   const [displayName, setDisplayName] = useState('')
-  const [householdChoice, setHouseholdChoice] = useState(null) // 'create' or 'join'
+  const [householdChoice, setHouseholdChoice] = useState(null)
   const [householdName, setHouseholdName] = useState('')
   const [income, setIncome] = useState('')
   const [loading, setLoading] = useState(false)
@@ -176,31 +183,24 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
     return TOTAL_STEPS
   }
 
-  async function handleStep1() {
+  // Step 1: just collect the name locally and advance – no DB call needed yet
+  function handleStep1() {
     if (!displayName.trim()) return
-    setLoading(true)
-    setError('')
-    try {
-      const { error } = await supabase.from('profiles').upsert({
-        id: user.id,
-        display_name: displayName.trim(),
-        onboarding_complete: false,
-      })
-      if (error) throw error
-      if (effectiveInviteCode) {
-        await handleJoinByCode(effectiveInviteCode)
-      } else {
-        setStep(2)
-      }
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
+    if (effectiveInviteCode) {
+      // Join flow: go straight to income step
+      handleJoinByCode(effectiveInviteCode)
+    } else {
+      setStep(2)
     }
   }
 
   async function handleJoinByCode(code) {
+    setLoading(true)
+    setError('')
     try {
+      const uid = await getAuthUid()
+      if (!uid) throw new Error('Inte inloggad')
+
       const { data: hh, error: hhErr } = await supabase
         .from('households')
         .select('*')
@@ -212,67 +212,47 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
         .from('profiles')
         .select('*', { count: 'exact', head: true })
         .eq('household_id', hh.id)
-
       if (count >= hh.max_members) throw new Error('Hushållet är fullt (max 4 personer)')
-
-      await supabase.from('profiles').upsert({
-        id: user.id,
-        household_id: hh.id,
-        role: 'member',
-      })
-
-      await supabase.from('gamification').upsert({
-        user_id: user.id,
-        household_id: hh.id,
-      })
 
       setJoinedHousehold(hh)
       setStep(effectiveInviteCode ? 2 : 3)
     } catch (err) {
-      throw err
+      setError(err.message)
+    } finally {
+      setLoading(false)
     }
   }
 
-  async function handleStep2Choice(choice) {
+  function handleStep2Choice(choice) {
     setHouseholdChoice(choice)
-    if (choice === 'create') {
-      setStep(3)
-    } else {
-      setStep(3)
-    }
+    setStep(3)
   }
 
+  // Step 3: create the household (but NOT the profile – that happens in handleFinish)
   async function handleCreateHousehold() {
     if (!householdName.trim()) return
     setLoading(true)
     setError('')
     try {
+      const uid = await getAuthUid()
+      if (!uid) throw new Error('Inte inloggad')
+
       const challenge = WEEKLY_CHALLENGES[Math.floor(Math.random() * WEEKLY_CHALLENGES.length)]
 
       const { data: hh, error: hhErr } = await supabase
         .from('households')
-        .insert({ name: householdName.trim(), admin_id: user.id })
+        .insert({ name: householdName.trim(), admin_id: uid })
         .select()
         .single()
       if (hhErr) throw hhErr
 
-      await supabase.from('profiles').upsert({
-        id: user.id,
-        household_id: hh.id,
-        role: 'admin',
-      })
-
-      await supabase.from('budgets').insert({
+      const { error: budgetErr } = await supabase.from('budgets').insert({
         household_id: hh.id,
         shared_categories: DEFAULT_SHARED_CATEGORIES,
         personal_categories: DEFAULT_PERSONAL_CATEGORIES,
         weekly_challenge: challenge,
       })
-
-      await supabase.from('gamification').upsert({
-        user_id: user.id,
-        household_id: hh.id,
-      })
+      if (budgetErr) console.error('Budget insert error:', budgetErr)
 
       setCreatedHousehold(hh)
       setStep(4)
@@ -283,21 +263,19 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
     }
   }
 
-  async function handleJoinStep() {
-    // They'll type an invite code
-  }
-
   async function handleSaveIncome() {
     setLoading(true)
     setError('')
     try {
       const hh = createdHousehold || joinedHousehold
       if (hh && income) {
+        const uid = await getAuthUid()
+        if (!uid) throw new Error('Inte inloggad')
         const now = new Date()
         const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
         await supabase.from('income').upsert({
           household_id: hh.id,
-          user_id: user.id,
+          user_id: uid,
           month,
           amount: parseFloat(income),
         })
@@ -310,18 +288,76 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
     }
   }
 
+  // Final step: save EVERYTHING about the profile in one single INSERT.
+  // We use INSERT (not upsert) because there should be no existing profile row.
+  // This avoids all the RLS upsert edge cases that were causing silent failures.
   async function handleFinish() {
     setLoading(true)
+    setError('')
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ onboarding_complete: true })
-        .eq('id', user.id)
-      if (error) throw error
-      await refreshProfile()
+      const uid = await getAuthUid()
+      if (!uid) throw new Error('Inte inloggad – försök logga ut och in igen')
+
+      const hh = createdHousehold || joinedHousehold
+      if (!hh) throw new Error('Inget hushåll – gå tillbaka och försök igen')
+
+      const role = householdChoice === 'create' ? 'admin' : 'member'
+      const name = displayName.trim() || 'Användare'
+
+      // 1. Create the profile
+      const { error: profileErr } = await supabase.from('profiles').insert({
+        id: uid,
+        display_name: name,
+        household_id: hh.id,
+        role,
+        onboarding_complete: true,
+      })
+
+      if (profileErr) {
+        // If profile already exists (e.g. from a previous partial attempt), update it instead
+        if (profileErr.code === '23505') {
+          const { error: updateErr } = await supabase
+            .from('profiles')
+            .update({
+              display_name: name,
+              household_id: hh.id,
+              role,
+              onboarding_complete: true,
+            })
+            .eq('id', uid)
+          if (updateErr) throw updateErr
+        } else {
+          throw profileErr
+        }
+      }
+
+      // 2. Create gamification record
+      await supabase.from('gamification').upsert({
+        user_id: uid,
+        household_id: hh.id,
+      }).then(({ error: gamErr }) => {
+        if (gamErr) console.error('Gamification error:', gamErr)
+      })
+
+      // 3. Save income if entered
+      if (income) {
+        const now = new Date()
+        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+        await supabase.from('income').upsert({
+          household_id: hh.id,
+          user_id: uid,
+          month,
+          amount: parseFloat(income),
+        }).then(({ error: incErr }) => {
+          if (incErr) console.error('Income error:', incErr)
+        })
+      }
+
+      // 4. Navigate to app – fresh page load picks up the new profile
+      window.location.href = '/'
     } catch (err) {
-      setError(err.message)
-    } finally {
+      console.error('handleFinish error:', err)
+      setError('Något gick fel: ' + (err?.message || 'Okänt fel'))
       setLoading(false)
     }
   }
@@ -446,7 +482,6 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
         {/* Step 3b: Join with invite code */}
         {step === 3 && householdChoice === 'join' && (
           <JoinWithCode
-            user={user}
             onJoined={(hh) => { setJoinedHousehold(hh); setStep(4) }}
             onError={setError}
           />
@@ -476,7 +511,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
         )}
 
         {/* Step 4: Income (for create household flow) */}
-        {step === 4 && householdChoice === 'create' && (
+        {step === 4 && (
           <div>
             <div style={styles.heading}>Din inkomst 💰</div>
             <div style={styles.subheading}>Vad är din månadsinkomst efter skatt?</div>
@@ -499,7 +534,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
         )}
 
         {/* Step 5: Invite link */}
-        {step === 5 && householdChoice === 'create' && createdHousehold && (
+        {step === 5 && createdHousehold && (
           <div>
             <div style={styles.heading}>Bjud in! 🎉</div>
             <div style={styles.subheading}>Dela länken med dina roommates</div>
@@ -533,7 +568,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
   )
 }
 
-function JoinWithCode({ user, onJoined, onError }) {
+function JoinWithCode({ onJoined, onError }) {
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -541,6 +576,9 @@ function JoinWithCode({ user, onJoined, onError }) {
     if (!code.trim()) return
     setLoading(true)
     try {
+      const uid = await getAuthUid()
+      if (!uid) throw new Error('Inte inloggad')
+
       const { data: hh, error: hhErr } = await supabase
         .from('households')
         .select('*')
@@ -553,18 +591,6 @@ function JoinWithCode({ user, onJoined, onError }) {
         .select('*', { count: 'exact', head: true })
         .eq('household_id', hh.id)
       if (count >= hh.max_members) throw new Error('Hushållet är fullt (max 4 personer)')
-
-      const { error: profileErr } = await supabase.from('profiles').upsert({
-        id: user.id,
-        household_id: hh.id,
-        role: 'member',
-      })
-      if (profileErr) throw profileErr
-
-      await supabase.from('gamification').upsert({
-        user_id: user.id,
-        household_id: hh.id,
-      })
 
       onJoined(hh)
     } catch (err) {
