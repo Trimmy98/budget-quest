@@ -848,10 +848,109 @@ export default function Settings({ selectedMonth, onMonthChange }) {
         </div>
 
         {showTransactions && (() => {
-          const myExpenses = expenses.filter(e => e.user_id === user?.id)
+          const myExpenses = expenses.filter(e => e.user_id === user?.id && e.expense_type !== 'shared')
+          const sharedExpenses = expenses.filter(e => e.expense_type === 'shared')
           const myIncomeEntries = allIncome.filter(i => i.user_id === user?.id)
           const allCats = [...(budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES),
                            ...(budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES)]
+          const getMemberName = (uid) => {
+            const m = members.find(m => m.id === uid)
+            return m?.display_name || 'Okänd'
+          }
+
+          const renderExpenseRow = (exp, showMember) => {
+            const cat = allCats.find(c => c.id === exp.category)
+            const isOther = exp.user_id !== user?.id
+            return (
+              <div key={exp.id}>
+                {editingEntry?.id === exp.id ? (
+                  <div style={{
+                    background: '#0b1120', borderRadius: 10, padding: 10, marginBottom: 6,
+                    border: `1px solid ${exp.expense_type === 'shared' ? '#ff79c6' : '#00ff87'}`,
+                  }}>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                      <input
+                        type="number"
+                        value={editingEntry.amount}
+                        onChange={e => setEditingEntry({ ...editingEntry, amount: e.target.value })}
+                        style={{
+                          flex: 1, background: '#020617', border: '1px solid #1e293b', borderRadius: 8,
+                          padding: '8px 10px', color: '#00ff87', fontFamily: 'Orbitron, sans-serif', fontSize: 13, outline: 'none',
+                        }}
+                      />
+                      <span style={{ color: '#64748b', fontSize: 13, alignSelf: 'center' }}>{symbol}</span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Beskrivning"
+                      value={editingEntry.description || ''}
+                      onChange={e => setEditingEntry({ ...editingEntry, description: e.target.value })}
+                      style={{
+                        width: '100%', background: '#020617', border: '1px solid #1e293b', borderRadius: 8,
+                        padding: '8px 10px', color: '#e2e8f0', fontFamily: 'Outfit, sans-serif', fontSize: 12, outline: 'none', marginBottom: 8,
+                      }}
+                    />
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                      {(exp.expense_type === 'shared'
+                        ? (budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES)
+                        : (budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES)
+                      ).map(c => (
+                        <button key={c.id} onClick={() => setEditingEntry({ ...editingEntry, category: c.id })} style={{
+                          background: editingEntry.category === c.id ? 'rgba(0,240,255,0.15)' : '#020617',
+                          border: `1px solid ${editingEntry.category === c.id ? '#00f0ff' : '#1e293b'}`,
+                          borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 11, color: editingEntry.category === c.id ? '#00f0ff' : '#94a3b8',
+                        }}>
+                          {c.icon} {c.name}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={saveEditEntry} style={{
+                        flex: 1, background: 'linear-gradient(135deg, #00f0ff, #00b4cc)', border: 'none', borderRadius: 8,
+                        padding: '8px 0', color: '#020617', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                      }}>Spara</button>
+                      <button onClick={() => setEditingEntry(null)} style={{
+                        flex: 1, background: 'transparent', border: '1px solid #1e293b', borderRadius: 8,
+                        padding: '8px 0', color: '#64748b', fontSize: 12, cursor: 'pointer',
+                      }}>Avbryt</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0',
+                    borderBottom: '1px solid #1e293b',
+                  }}>
+                    <span style={{ fontSize: 16 }}>{cat?.icon || '📦'}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {exp.description || cat?.name || exp.category}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#64748b' }}>
+                        {exp.date}{showMember ? ` • ${isOther ? getMemberName(exp.user_id) : 'Du'}` : ''} • {exp.expense_type === 'shared' ? '👥' : '👤'}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 13, flexShrink: 0,
+                      color: exp.expense_type === 'shared' ? '#ff79c6' : '#ff6b6b',
+                    }}>
+                      -{Number(exp.amount).toFixed(0)}{symbol}
+                    </span>
+                    <button onClick={() => setEditingEntry({
+                      type: 'expense', id: exp.id, amount: exp.amount,
+                      description: exp.description || '', category: exp.category,
+                    })} style={{
+                      background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: 6,
+                      padding: '3px 8px', color: '#00f0ff', cursor: 'pointer', fontSize: 11, flexShrink: 0,
+                    }}>✏️</button>
+                    <button onClick={() => deleteExpense(exp.id)} style={{
+                      background: 'rgba(255,107,107,0.1)', border: '1px solid rgba(255,107,107,0.2)', borderRadius: 6,
+                      padding: '3px 8px', color: '#ff6b6b', cursor: 'pointer', fontSize: 11, flexShrink: 0,
+                    }}>✕</button>
+                  </div>
+                )}
+              </div>
+            )
+          }
 
           return (
             <div>
@@ -931,108 +1030,27 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                 </div>
               )}
 
-              {/* Expense entries */}
-              {myExpenses.length > 0 && (
-                <div>
+              {/* Shared expense entries (all members) */}
+              {sharedExpenses.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 11, color: '#ff79c6', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 8 }}>
-                    🧾 UTGIFTER ({selectedMonth})
+                    👥 GEMENSAMMA UTGIFTER ({selectedMonth})
                   </div>
-                  {myExpenses.map(exp => {
-                    const cat = allCats.find(c => c.id === exp.category)
-                    return (
-                      <div key={exp.id}>
-                        {editingEntry?.id === exp.id ? (
-                          <div style={{
-                            background: '#0b1120', borderRadius: 10, padding: 10, marginBottom: 6,
-                            border: `1px solid ${exp.expense_type === 'shared' ? '#ff79c6' : '#00ff87'}`,
-                          }}>
-                            <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                              <input
-                                type="number"
-                                value={editingEntry.amount}
-                                onChange={e => setEditingEntry({ ...editingEntry, amount: e.target.value })}
-                                style={{
-                                  flex: 1, background: '#020617', border: '1px solid #1e293b', borderRadius: 8,
-                                  padding: '8px 10px', color: '#00ff87', fontFamily: 'Orbitron, sans-serif', fontSize: 13, outline: 'none',
-                                }}
-                              />
-                              <span style={{ color: '#64748b', fontSize: 13, alignSelf: 'center' }}>{symbol}</span>
-                            </div>
-                            <input
-                              type="text"
-                              placeholder="Beskrivning"
-                              value={editingEntry.description || ''}
-                              onChange={e => setEditingEntry({ ...editingEntry, description: e.target.value })}
-                              style={{
-                                width: '100%', background: '#020617', border: '1px solid #1e293b', borderRadius: 8,
-                                padding: '8px 10px', color: '#e2e8f0', fontFamily: 'Outfit, sans-serif', fontSize: 12, outline: 'none', marginBottom: 8,
-                              }}
-                            />
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-                              {(exp.expense_type === 'shared'
-                                ? (budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES)
-                                : (budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES)
-                              ).map(c => (
-                                <button key={c.id} onClick={() => setEditingEntry({ ...editingEntry, category: c.id })} style={{
-                                  background: editingEntry.category === c.id ? 'rgba(0,240,255,0.15)' : '#020617',
-                                  border: `1px solid ${editingEntry.category === c.id ? '#00f0ff' : '#1e293b'}`,
-                                  borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 11, color: editingEntry.category === c.id ? '#00f0ff' : '#94a3b8',
-                                }}>
-                                  {c.icon} {c.name}
-                                </button>
-                              ))}
-                            </div>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button onClick={saveEditEntry} style={{
-                                flex: 1, background: 'linear-gradient(135deg, #00f0ff, #00b4cc)', border: 'none', borderRadius: 8,
-                                padding: '8px 0', color: '#020617', fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                              }}>Spara</button>
-                              <button onClick={() => setEditingEntry(null)} style={{
-                                flex: 1, background: 'transparent', border: '1px solid #1e293b', borderRadius: 8,
-                                padding: '8px 0', color: '#64748b', fontSize: 12, cursor: 'pointer',
-                              }}>Avbryt</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{
-                            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0',
-                            borderBottom: '1px solid #1e293b',
-                          }}>
-                            <span style={{ fontSize: 16 }}>{cat?.icon || '📦'}</span>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 13, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {exp.description || cat?.name || exp.category}
-                              </div>
-                              <div style={{ fontSize: 10, color: '#64748b' }}>
-                                {exp.date} • {exp.expense_type === 'shared' ? '👥' : '👤'}
-                              </div>
-                            </div>
-                            <span style={{
-                              fontFamily: 'Orbitron, sans-serif', fontSize: 13, flexShrink: 0,
-                              color: exp.expense_type === 'shared' ? '#ff79c6' : '#ff6b6b',
-                            }}>
-                              -{Number(exp.amount).toFixed(0)}{symbol}
-                            </span>
-                            <button onClick={() => setEditingEntry({
-                              type: 'expense', id: exp.id, amount: exp.amount,
-                              description: exp.description || '', category: exp.category,
-                            })} style={{
-                              background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: 6,
-                              padding: '3px 8px', color: '#00f0ff', cursor: 'pointer', fontSize: 11, flexShrink: 0,
-                            }}>✏️</button>
-                            <button onClick={() => deleteExpense(exp.id)} style={{
-                              background: 'rgba(255,107,107,0.1)', border: '1px solid rgba(255,107,107,0.2)', borderRadius: 6,
-                              padding: '3px 8px', color: '#ff6b6b', cursor: 'pointer', fontSize: 11, flexShrink: 0,
-                            }}>✕</button>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
+                  {sharedExpenses.map(exp => renderExpenseRow(exp, true))}
                 </div>
               )}
 
-              {myExpenses.length === 0 && myIncomeEntries.length === 0 && (
+              {/* Personal expense entries (own only) */}
+              {myExpenses.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: '#00ff87', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 8 }}>
+                    👤 PERSONLIGA UTGIFTER ({selectedMonth})
+                  </div>
+                  {myExpenses.map(exp => renderExpenseRow(exp, false))}
+                </div>
+              )}
+
+              {myExpenses.length === 0 && sharedExpenses.length === 0 && myIncomeEntries.length === 0 && (
                 <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: '12px 0' }}>
                   Inga loggningar för {selectedMonth}
                 </div>
