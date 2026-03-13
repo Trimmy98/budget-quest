@@ -25,85 +25,124 @@ function getMood(savingsRate, streak, hour) {
 
 function getMessages(savingsRate, streak, expenseCount, perDay, hour, symbol) {
   const messages = []
-  const hour24 = hour
 
-  // Time-based greetings
-  if (hour24 >= 0 && hour24 < 6) {
-    messages.push('Zzz... Sov gott! Pengarna vilar också... 💤')
-    messages.push('*snarkar*... budget... sparande... zzz...')
+  // ====== NATT (00-06) ======
+  if (hour >= 0 && hour < 6) {
+    messages.push('Zzz... drömmer om ränta-på-ränta... 💤')
+    messages.push('*mumlar i sömnen* ...spara... mer... zzz...')
+    messages.push('Shh! Pengarna sover. Väck dem inte. 🤫')
     return messages
   }
-  if (hour24 >= 6 && hour24 < 10) {
-    messages.push('God morgon! Redo att ta tag i ekonomin idag? ☀️')
-    messages.push('Ny dag, nya möjligheter att spara! 🌅')
-  }
-  if (hour24 >= 22) {
-    messages.push('Bra jobbat idag! Dags att vila snart 🌙')
-    messages.push('Ekonomin sover aldrig, men du borde! 😴')
+
+  // ====== MORGON (06-10) ======
+  if (hour >= 6 && hour < 10) {
+    messages.push('Gomorron! Plånboken är laddad och redo! ☀️')
+    messages.push('Kaffe först, budgetera sen. Prioriteringar. ☕')
+    messages.push('Fun fact: Du tjänar pengar medan du läser detta. Typ. 🧠')
   }
 
-  // Savings rate messages
-  if (savingsRate >= 0.3) {
-    messages.push('DU ÄR EN LEGEND! 30%+ sparkvot! 🏆')
-    messages.push('Pengarna älskar dig! Fortsätt så här! 💎')
-    messages.push('Jag har aldrig sett en så fin budget... *tårögd* 🥲')
-    messages.push('Du sparar som ett proffs! Imponerad! 🌟')
+  // ====== LUNCH (11-13) ======
+  if (hour >= 11 && hour < 13) {
+    messages.push('Lunch! Matlåda = +50 style points 🍱')
+    messages.push('Restaurang? Jag dömer inte... men plånboken gör det 👀')
+  }
+
+  // ====== EFTERMIDDAG (15-17) ======
+  if (hour >= 15 && hour < 17) {
+    messages.push('Fika-dags! En hemmabrygd sparar ~40kr 🧇')
+    messages.push('Fredagsmyset närmar sig... RIP budgeten? 😬')
+  }
+
+  // ====== KVÄLL (20-00) ======
+  if (hour >= 20) {
+    messages.push('Nattsurf-shopping? Lägg ner mobilen. Jag ser dig. 👁️')
+    messages.push('Sov gott! Imorgon sparar vi världen. Eller 50kr. 🌙')
+    messages.push('Pro tip: Handla aldrig online efter kl 22. Trust me. 🛒')
+  }
+
+  // ====== SPARKVOT ======
+  if (savingsRate >= 0.35) {
+    messages.push('Du sparar mer än Warren Buffett i procent. Respekt. 🐐')
+    messages.push('35%+?! Ska vi byta plats? Du kan vara maskoten. 👑')
+    messages.push('Bankerna HATAR detta trick (att du sparar så mycket) 💎')
+  } else if (savingsRate >= 0.25) {
+    messages.push('25%+ sparkvot — du är basically en ekonomisk atlet 🏅')
+    messages.push('Din framtida version skickar just nu ett tackkort 💌')
+    messages.push('Du gör mig stolt. Och jag är en emoji. Det säger nåt. 🥲')
   } else if (savingsRate >= 0.2) {
-    messages.push('Snyggt! Du klarar 20%-regeln! 🎯')
-    messages.push('Ekonomerna hade varit stolta över dig! 📈')
-    messages.push('Fortsätt så här, du gör det fantastiskt! ✨')
+    messages.push('20%-regeln? Check! Du är officiellt en vuxen ✅')
+    messages.push('Ekonomer överallt nickar godkännande åt dig just nu 📈')
   } else if (savingsRate >= 0.1) {
-    messages.push('Bra start! Kan du pusha till 20%? 🚀')
-    messages.push('Du är på väg åt rätt håll! Keep going! 💪')
-    messages.push('Lite till så är du i gröna zonen! 🎯')
+    messages.push('10% — bra start! Men jag vet att du kan mer 🚀')
+    messages.push('Halvvägs till guldstandarden! Pusha lite till! 🎯')
+    messages.push('Varje procent räknas. Du är på väg uppåt! 📊')
   } else if (savingsRate >= 0) {
-    messages.push('Hmm, det går jämnt ut... Kan vi hitta besparingar? 🔍')
-    messages.push('Varje krona räknas! Kolla om du kan skippa något? 💡')
-    messages.push('Tips: Börja med att spara lite, sedan öka gradvis! 📊')
+    messages.push('Det går runt! Men "gå runt" är inte ett livsmål 🎡')
+    messages.push('Noll i minus — glas halvfullt! Eller halvtomt. Hmm. 🤷')
+    messages.push('Tips: Hitta EN sak du kan skippa denna vecka 🔍')
+  } else if (savingsRate >= -0.1) {
+    messages.push('Lite rött... som en solnedgång. Fast med pengar. 🌅')
+    messages.push('Vi blöder lite. Finns det en prenumeration vi glömt? 🩹')
+    messages.push('Ingen panik! Men kanske lite mini-panik. Lagom panik. 😅')
   } else {
-    messages.push('Ojdå! Vi spenderar mer än vi tjänar... 😬')
-    messages.push('MAYDAY! Budgeten behöver akut hjälp! 🚨')
-    messages.push('Låt oss hitta var pengarna försvinner! 🔎')
+    messages.push('DEFCON 1! Pengarna flyr! Stäng alla appar med köpknappar! 🚨')
+    messages.push('Houston, vi har ett budgetproblem. Över. 🛸')
+    messages.push('Okej deep breath. Vi fixar detta. Steg 1: Sluta shoppa. 🫣')
+    messages.push('Jag vill inte oroa dig men... *pekar på budgeten* 📉')
   }
 
-  // Streak messages
+  // ====== STREAK ======
   if (streak >= 30) {
-    messages.push(`${streak} dagars streak! Du är OSTOPPBAR! 🔥🔥🔥`)
+    messages.push(`${streak} dagars streak! Du är mer pålitlig än min väckarklocka 🔥🔥🔥`)
+    messages.push(`${streak} dagar?! Du förtjänar en staty. Av guld. Budgeterat guld. 🏆`)
   } else if (streak >= 14) {
-    messages.push(`${streak} dagar i rad! Du är en maskin! 🤖`)
+    messages.push(`${streak} dagars streak! Du och budgeten — name a better duo 🤖`)
   } else if (streak >= 7) {
-    messages.push(`En hel veckas streak! Fantastiskt! 🎉`)
+    messages.push('En hel veckas streak! Du är officiellt hooked! 🎣')
   } else if (streak >= 3) {
-    messages.push(`${streak} dagars streak! Kör hårt! 🔥`)
+    messages.push(`${streak} dagar i rad! Tre-i-rad, fast med pengar! 🎰`)
+  } else if (streak === 0 && expenseCount > 0) {
+    messages.push('Streaken dog... men som en fågel Fenix, res dig igen! 🔥')
   } else if (streak === 0) {
-    messages.push('Ingen streak ännu... Logga en utgift för att starta! ⚡')
+    messages.push('Psst! Logga en utgift, så startar vi en streak! ⚡')
   }
 
-  // Per day budget
+  // ====== DAGLIG BUDGET ======
   if (perDay !== undefined && perDay !== null && !isNaN(perDay) && isFinite(perDay)) {
-    if (perDay > 100) {
-      messages.push(`${perDay.toFixed(0)}${symbol} kvar per dag – gott om utrymme! 😌`)
+    if (perDay > 500) {
+      messages.push(`${perDay.toFixed(0)}${symbol}/dag kvar — du simmar i det! 🏊`)
+    } else if (perDay > 100) {
+      messages.push(`${perDay.toFixed(0)}${symbol}/dag — nice, det räcker till mer än nudlar 🍜`)
     } else if (perDay > 0) {
-      messages.push(`${perDay.toFixed(0)}${symbol}/dag kvar – tänk innan du handlar! 🤔`)
-    } else if (perDay <= 0) {
-      messages.push('Budgeten för månaden är slut... Strama åt! 🫣')
+      messages.push(`${perDay.toFixed(0)}${symbol}/dag kvar. Varje köp är ett strategiskt beslut nu 🎯`)
+    } else {
+      messages.push('Dagbudgeten tog slut. Vi lever på luft och kärlek nu 🫠')
     }
   }
 
-  // Expense count
+  // ====== ANTAL UTGIFTER ======
   if (expenseCount >= 100) {
-    messages.push('Över 100 loggade utgifter! Du är en DATA-GURU! 📊')
+    messages.push('100+ loggningar! Du har mer data än riksbanken 📊')
   } else if (expenseCount >= 50) {
-    messages.push('50+ utgifter loggade! Du har riktigt bra koll! 📋')
-  } else if (expenseCount === 0) {
-    messages.push('Inga utgifter ännu? Logga din första! Det ger 25 XP! ⚡')
+    messages.push('50+ loggade! Du ser mönster som Neo i Matrix 🟢')
+  } else if (expenseCount >= 10) {
+    messages.push('Bra loggat! Ju mer data, desto smartare beslut 🧠')
   }
 
-  // Random motivational
-  messages.push('Visste du? Att logga utgifter regelbundet sparar i snitt 15%! 🧠')
-  messages.push('En liten utgift idag = en stor besparing imorgon! 🌱')
-  messages.push('Du och jag, vi fixar detta tillsammans! 🤝')
-  messages.push('Jag tror på dig! Budget Quest champion! 🏅')
+  // ====== SLUMPADE ROLIGA ======
+  const funFacts = [
+    'Visste du att impulsköp står för ~40% av onlineshopping? Skrämmande. 😱',
+    'Att vänta 24h innan ett köp eliminerar 70% av impulsköpen! 🧊',
+    'Rika människor kollar sin budget oftare. Coincidence? I think not. 🕵️',
+    'Du har klickat på mig. +0 XP men +100 charm 💅',
+    'Jag är stolt över dig. Oavsett budget. Men extra stolt med budget. 🤗',
+    'Plot twist: Den rikaste personen i rummet är den som behöver minst 🧘',
+    'Prenumerationer är som vampyrer. De suger långsamt. Granska dem! 🧛',
+  ]
+  // Lägg till 2 slumpade fun facts
+  const shuffled = funFacts.sort(() => 0.5 - Math.random())
+  messages.push(shuffled[0])
+  if (shuffled[1]) messages.push(shuffled[1])
 
   return messages
 }
@@ -181,10 +220,6 @@ export default function Mascot({ savingsRate = 0, streak = 0, expenseCount = 0, 
         @keyframes bubble-in {
           0% { opacity: 0; transform: scale(0.8) translateY(10px); }
           100% { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        @keyframes bubble-out {
-          0% { opacity: 1; transform: scale(1); }
-          100% { opacity: 0; transform: scale(0.8); }
         }
         @keyframes glow-pulse {
           0%, 100% { box-shadow: 0 0 15px var(--glow-color); }
