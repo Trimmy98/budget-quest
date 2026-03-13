@@ -95,7 +95,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
       const member = members.find(m => m.id === g.user_id)
       const memberIncomeEntries = allIncome.filter(i => i.user_id === g.user_id)
       const memberIncome = memberIncomeEntries.reduce((sum, i) => sum + Number(i.amount), 0)
-      const memberShared = sharedTotal / memberCount
+      const memberShared = totalActuallyPaid / memberCount
       const memberPersonal = expenses.filter(e => e.user_id === g.user_id && e.expense_type === 'personal')
         .reduce((sum, e) => sum + Number(e.amount), 0)
       const saved = memberIncome - memberShared - memberPersonal

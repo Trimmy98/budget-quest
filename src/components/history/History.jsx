@@ -89,20 +89,22 @@ export default function History({ gamification, selectedMonth }) {
         const sortedCats = Object.entries(categoryBreakdown).sort((a, b) => b[1].total - a[1].total)
         const topCat = sortedCats[0]
 
-        // Day-of-week spending
+        // Day-of-week spending (dela gemensamma på antal medlemmar)
         const dayOfWeekSpend = [0, 0, 0, 0, 0, 0, 0]
         const dayOfWeekCount = [0, 0, 0, 0, 0, 0, 0]
         myExpenses.forEach(e => {
           const day = new Date(e.date).getDay()
-          dayOfWeekSpend[day] += Number(e.amount)
+          const amt = e.expense_type === 'shared' ? Number(e.amount) / memCount : Number(e.amount)
+          dayOfWeekSpend[day] += amt
           dayOfWeekCount[day]++
         })
 
-        // Daily spending for burn rate
+        // Daily spending for burn rate (dela gemensamma på antal medlemmar)
         const dailySpend = {}
         myExpenses.forEach(e => {
           const day = parseInt(e.date?.split('-')[2])
-          if (day) dailySpend[day] = (dailySpend[day] || 0) + Number(e.amount)
+          const amt = e.expense_type === 'shared' ? Number(e.amount) / memCount : Number(e.amount)
+          if (day) dailySpend[day] = (dailySpend[day] || 0) + amt
         })
         const activeDays = Object.keys(dailySpend).length
         const avgDailySpend = activeDays > 0 ? totalSpent / activeDays : 0

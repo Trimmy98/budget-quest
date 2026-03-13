@@ -49,7 +49,7 @@ export default function AddExpense({ onExpenseAdded }) {
       return
     }
     if (expenseType !== 'income' && !category) {
-      setError('Fyll i belopp och kategori')
+      setError('Välj en kategori')
       return
     }
     const parsed = parseFloat(amount)
