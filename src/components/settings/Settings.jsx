@@ -197,7 +197,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
 
   async function saveEditEntry() {
     if (!editingEntry) return
-    const { type, id, amount, description, category } = editingEntry
+    const { type, id, amount, description, category, paid_amount } = editingEntry
     const parsedAmount = parseFloat(amount)
     if (isNaN(parsedAmount) || parsedAmount <= 0) return
 
@@ -208,11 +208,17 @@ export default function Settings({ selectedMonth, onMonthChange }) {
       }).eq('id', id)
       refetchIncome()
     } else {
-      await supabase.from('expenses').update({
+      const updateData = {
         amount: parsedAmount,
         description: description || null,
         category,
-      }).eq('id', id)
+      }
+      // Om paid_amount finns (gemensam utgift), spara den också
+      if (paid_amount !== undefined) {
+        const parsedPaid = parseFloat(paid_amount)
+        updateData.paid_amount = isNaN(parsedPaid) || parsedPaid < 0 ? parsedAmount : parsedPaid
+      }
+      await supabase.from('expenses').update(updateData).eq('id', id)
       refetchExpenses()
     }
     setEditingEntry(null)
@@ -890,6 +896,27 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                         padding: '8px 10px', color: '#e2e8f0', fontFamily: 'Outfit, sans-serif', fontSize: 12, outline: 'none', marginBottom: 8,
                       }}
                     />
+                    {/* Betalt av loggaren - bara för gemensamma utgifter */}
+                    {exp.expense_type === 'shared' && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>
+                          💳 Betalt av {getMemberName(exp.user_id)} ({symbol})
+                        </div>
+                        <input
+                          type="number"
+                          value={editingEntry.paid_amount ?? ''}
+                          onChange={e => setEditingEntry({ ...editingEntry, paid_amount: e.target.value })}
+                          placeholder={editingEntry.amount}
+                          style={{
+                            width: '100%', background: '#020617', border: '1px solid rgba(255,121,198,0.3)', borderRadius: 8,
+                            padding: '8px 10px', color: '#ff79c6', fontFamily: 'Orbitron, sans-serif', fontSize: 13, outline: 'none',
+                          }}
+                        />
+                        <div style={{ fontSize: 9, color: '#475569', marginTop: 3 }}>
+                          Lämna tomt = betalade hela beloppet
+                        </div>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
                       {(exp.expense_type === 'shared'
                         ? (budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES)
@@ -927,6 +954,9 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                       </div>
                       <div style={{ fontSize: 10, color: '#64748b' }}>
                         {exp.date}{showMember ? ` • ${isOther ? getMemberName(exp.user_id) : 'Du'}` : ''} • {exp.expense_type === 'shared' ? '👥' : '👤'}
+                        {exp.expense_type === 'shared' && exp.paid_amount != null && Number(exp.paid_amount) !== Number(exp.amount) && (
+                          <span style={{ color: '#ff79c6' }}> • 💳 {Number(exp.paid_amount).toFixed(0)}{symbol} betalt</span>
+                        )}
                       </div>
                     </div>
                     <span style={{
@@ -938,6 +968,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                     <button onClick={() => setEditingEntry({
                       type: 'expense', id: exp.id, amount: exp.amount,
                       description: exp.description || '', category: exp.category,
+                      ...(exp.expense_type === 'shared' ? { paid_amount: exp.paid_amount ?? exp.amount } : {}),
                     })} style={{
                       background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: 6,
                       padding: '3px 8px', color: '#00f0ff', cursor: 'pointer', fontSize: 11, flexShrink: 0,

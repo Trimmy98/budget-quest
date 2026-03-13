@@ -64,7 +64,8 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
   // Skuldsaldo: vem har lagt ut vad av gemensamma utgifter
   const memberPaid = {} // hur mycket varje person har BETALAT av gemensamma
   sharedExpenses.forEach(e => {
-    memberPaid[e.user_id] = (memberPaid[e.user_id] || 0) + Number(e.amount)
+    // paid_amount = vad loggaren faktiskt betalade, annars fallback till amount (bakåtkompatibelt)
+    memberPaid[e.user_id] = (memberPaid[e.user_id] || 0) + Number(e.paid_amount ?? e.amount)
   })
   const fairSharePerPerson = sharedTotal / memberCount
   // Saldo = vad personen betalat - vad de borde ha betalat (positivt = har lagt ut för andra)

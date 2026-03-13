@@ -86,11 +86,16 @@ export default function AddExpense({ onExpenseAdded }) {
         const saveAmount = expenseType === 'shared' && splitMode === 'mine'
           ? parsed * memberCount
           : parsed
+        // paid_amount = vad loggaren faktiskt betalade (för Pengapusslet)
+        const paidAmount = expenseType === 'shared'
+          ? (splitMode === 'full' ? saveAmount : parsed)
+          : saveAmount
         const { error: insertErr } = await supabase.from('expenses').insert({
           household_id: profile.household_id,
           user_id: user.id,
           date: today,
           amount: saveAmount,
+          paid_amount: paidAmount,
           description,
           category,
           expense_type: expenseType,
