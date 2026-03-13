@@ -91,7 +91,7 @@ export default function Personal({ selectedMonth }) {
             textShadow: '0 0 15px rgba(0,255,135,0.5)',
             marginBottom: 12,
           }}>
-            {myIncome.toFixed(2)}{symbol}
+            {myIncome.toFixed(0)}{symbol}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
@@ -220,7 +220,7 @@ export default function Personal({ selectedMonth }) {
               {(savingsRate * 100).toFixed(1)}%
             </div>
             <div style={{ fontSize: 12, color: '#64748b' }}>
-              {mySaved >= 0 ? '+' : ''}{mySaved.toFixed(2)}{symbol} sparat
+              {mySaved >= 0 ? '+' : ''}{mySaved.toFixed(0)}{symbol} sparat
             </div>
           </div>
         </div>

@@ -55,23 +55,32 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   async function autoLogSubscriptions(subs) {
     if (!profile?.household_id || !user?.id || subs.length === 0) return
     const month = getCurrentMonth()
-    const logKey = `subs_logged_${user.id}_${month}`
-    if (localStorage.getItem(logKey)) return
-
     const firstOfMonth = `${month}-01`
+
+    // Kolla i DB om prenumerationer redan loggats denna månad (säkrare än localStorage)
+    const { data: existing } = await supabase
+      .from('expenses')
+      .select('description')
+      .eq('household_id', profile.household_id)
+      .eq('user_id', user.id)
+      .eq('date', firstOfMonth)
+      .like('description', '%(prenumeration)%')
+    const existingNames = new Set((existing || []).map(e => e.description))
+
     for (const sub of subs) {
+      const desc = `${sub.name} (prenumeration)`
+      if (existingNames.has(desc)) continue // redan loggad
       const monthly = getMonthlyAmount(sub)
       await supabase.from('expenses').insert({
         household_id: profile.household_id,
         user_id: user.id,
         date: firstOfMonth,
         amount: Math.round(monthly * 100) / 100,
-        description: `${sub.name} (prenumeration)`,
+        description: desc,
         category: 'misc',
         expense_type: 'personal',
       })
     }
-    localStorage.setItem(logKey, 'true')
   }
 
   async function logSubscriptionAsExpense(sub) {
