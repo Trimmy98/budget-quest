@@ -255,6 +255,41 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           ))}
         </div>
 
+        {/* Prognos */}
+        {myIncome > 0 && isCurrentMonth && currentDay > 3 && (() => {
+          const dailyRate = totalSpent / currentDay
+          const projectedSpend = dailyRate * daysInMonth
+          const projectedSaved = myIncome - projectedSpend
+          const projectedRate = myIncome > 0 ? projectedSaved / myIncome : 0
+          const trend = projectedSaved > mySaved ? 'up' : projectedSaved < mySaved * 0.5 ? 'down' : 'flat'
+          return (
+            <div style={{
+              background: 'rgba(2,6,23,0.6)', borderRadius: 12, padding: '10px 12px',
+              marginBottom: 12, border: '1px solid #1e293b',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <span style={{ fontSize: 18 }}>{projectedSaved >= 0 ? '🔮' : '⚠️'}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>Prognos vid månadens slut</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{
+                    fontFamily: 'Orbitron, sans-serif', fontSize: 16, fontWeight: 700,
+                    color: projectedSaved >= 0 ? '#00ff87' : '#ff6b6b',
+                  }}>
+                    {projectedSaved >= 0 ? '+' : ''}{projectedSaved.toFixed(0)}{symbol}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#475569' }}>
+                    ({(projectedRate * 100).toFixed(0)}% sparkvot)
+                  </span>
+                </div>
+              </div>
+              <span style={{ fontSize: 14 }}>
+                {trend === 'up' ? '📈' : trend === 'down' ? '📉' : '➡️'}
+              </span>
+            </div>
+          )
+        })()}
+
         {/* Income bar visualization */}
         {myIncome > 0 && (
           <div style={{ borderRadius: 8, overflow: 'hidden', height: 8, background: '#0b1120', display: 'flex' }}>
@@ -473,7 +508,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
                   Alla pusselbitar passar!
                 </div>
                 <div style={{ fontSize: 11, color: '#475569' }}>
-                  Ingen behover swisha nagon
+                  Ingen behöver swisha någon
                 </div>
               </div>
             )}
@@ -501,6 +536,25 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           95% { transform: translateX(3px); }
         }
       `}</style>
+
+      {/* ═══ EMPTY STATE ═══ */}
+      {myIncome === 0 && expenses.length === 0 && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(0,240,255,0.06), rgba(167,139,250,0.04))',
+          border: '1px dashed rgba(0,240,255,0.3)',
+          borderRadius: 20, padding: '24px 16px', marginBottom: 14,
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>🚀</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>
+            Dags att komma igång!
+          </div>
+          <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+            Logga din <strong style={{ color: '#ffd93d' }}>inkomst</strong> och din första{' '}
+            <strong style={{ color: '#00ff87' }}>utgift</strong> så vaknar dashboarden till liv.
+          </div>
+        </div>
+      )}
 
       {/* ═══ BUDGETKOLL ═══ */}
       {myIncome > 0 && isCurrentMonth && (() => {
@@ -573,8 +627,9 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
             👥 GEMENSAM BUDGET
           </div>
           {sharedCats.map(cat => {
-            const spent = categorySpend[cat.id] || 0
-            const pct = cat.budget > 0 ? spent / cat.budget : 0
+            const spent = (categorySpend[cat.id] || 0) / memberCount
+            const myBudget = cat.budget / memberCount
+            const pct = myBudget > 0 ? spent / myBudget : 0
             const isOver = pct > 1
             return (
               <div key={cat.id} style={{ marginBottom: 10 }}>
@@ -585,12 +640,12 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
                       fontSize: 11, fontFamily: 'Orbitron, sans-serif',
                       color: isOver ? '#ff6b6b' : '#00f0ff',
                     }}>
-                      {spent.toFixed(0)}/{cat.budget}{symbol}
+                      {spent.toFixed(0)}/{myBudget.toFixed(0)}{symbol}
                     </span>
                     {isOver && <span style={{ fontSize: 10, color: '#ff6b6b' }}>⚠️</span>}
                   </div>
                 </div>
-                <ProgressBar value={spent} max={cat.budget} color={isOver ? '#ff6b6b' : '#00f0ff'} height={4} />
+                <ProgressBar value={spent} max={myBudget} color={isOver ? '#ff6b6b' : '#00f0ff'} height={4} />
               </div>
             )
           })}
@@ -757,7 +812,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
                   fontFamily: 'Orbitron, sans-serif', fontSize: 13, fontWeight: 700, flexShrink: 0,
                   color: expense.expense_type === 'shared' ? '#ff79c6' : '#a78bfa',
                 }}>
-                  -{Number(expense.amount).toFixed(0)}{symbol}
+                  -{(expense.expense_type === 'shared' ? Number(expense.amount) / memberCount : Number(expense.amount)).toFixed(0)}{symbol}
                 </div>
               </div>
             )
@@ -768,9 +823,10 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
       {/* ═══ UTGIFTSMÖNSTER ═══ */}
       {(() => {
         const dailySpend = {}
-        expenses.forEach(e => {
+        myExpenses.forEach(e => {
           const day = parseInt(e.date?.split('-')[2])
-          if (day) dailySpend[day] = (dailySpend[day] || 0) + Number(e.amount)
+          const amt = e.expense_type === 'shared' ? Number(e.amount) / memberCount : Number(e.amount)
+          if (day) dailySpend[day] = (dailySpend[day] || 0) + amt
         })
         const days = Object.keys(dailySpend).map(Number).sort((a, b) => a - b)
         if (days.length === 0) return null
@@ -860,7 +916,8 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           myExpenses.reduce((acc, e) => {
             const cat = allCats.find(c => c.id === e.category)
             const name = cat ? `${cat.icon} ${cat.name}` : e.category
-            acc[name] = (acc[name] || 0) + Number(e.amount)
+            const amt = e.expense_type === 'shared' ? Number(e.amount) / memberCount : Number(e.amount)
+            acc[name] = (acc[name] || 0) + amt
             return acc
           }, {})
         ).sort((a, b) => b[1] - a[1])[0]
