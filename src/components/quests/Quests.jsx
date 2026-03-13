@@ -50,7 +50,7 @@ export default function Quests({ selectedMonth }) {
       const memberCount = members.length || 1
       const sharedTotal = (exps || []).filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0)
       const personalTotal = (exps || []).filter(e => e.user_id === user.id && e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
-      const myInc = (inc || []).find(i => i.user_id === user.id)?.amount || 0
+      const myInc = (inc || []).filter(i => i.user_id === user.id).reduce((s, i) => s + Number(i.amount), 0)
       const mySaved = myInc - sharedTotal / memberCount - personalTotal
       const rate = myInc > 0 ? mySaved / myInc : 0
 
@@ -200,7 +200,7 @@ export default function Quests({ selectedMonth }) {
           INDIVIDUELLT SPARANDE
         </div>
         {members.map(member => {
-          const memberIncome = allIncome.find(i => i.user_id === member.id)?.amount || 0
+          const memberIncome = allIncome.filter(i => i.user_id === member.id).reduce((s, i) => s + Number(i.amount), 0)
           const memberPersonal = expenses.filter(e => e.user_id === member.id && e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
           const memberSaved = memberIncome - myShareOfShared - memberPersonal
           const memberRate = memberIncome > 0 ? memberSaved / memberIncome : 0

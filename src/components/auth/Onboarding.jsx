@@ -368,9 +368,13 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
     const hh = createdHousehold
     if (!hh) return
     const link = `${window.location.origin}/join/${hh.invite_code}`
-    await navigator.clipboard.writeText(link)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      prompt('Kopiera länken:', link)
+    }
   }
 
   const stepCount = getStepCount()

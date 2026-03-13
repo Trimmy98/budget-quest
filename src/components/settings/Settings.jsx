@@ -146,9 +146,14 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   async function copyInviteLink() {
     if (!household) return
     const link = `${window.location.origin}/join/${household.invite_code}`
-    await navigator.clipboard.writeText(link)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback för äldre webbläsare / nekad behörighet
+      prompt('Kopiera länken:', link)
+    }
   }
 
   async function regenerateInviteCode() {
