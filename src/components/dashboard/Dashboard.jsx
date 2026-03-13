@@ -61,6 +61,21 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
   const streak = gamification?.streak_current || 0
   const badgeCount = gamification?.achievements?.length || 0
 
+  // Skuldsaldo: vem har lagt ut vad av gemensamma utgifter
+  const memberPaid = {} // hur mycket varje person har BETALAT av gemensamma
+  sharedExpenses.forEach(e => {
+    memberPaid[e.user_id] = (memberPaid[e.user_id] || 0) + Number(e.amount)
+  })
+  const fairSharePerPerson = sharedTotal / memberCount
+  // Saldo = vad personen betalat - vad de borde ha betalat (positivt = har lagt ut för andra)
+  const memberBalances = members.map(m => ({
+    id: m.id,
+    name: m.display_name || 'Okänd',
+    paid: memberPaid[m.id] || 0,
+    fairShare: fairSharePerPerson,
+    balance: (memberPaid[m.id] || 0) - fairSharePerPerson,
+  })).filter(m => m.paid > 0 || fairSharePerPerson > 0)
+
   // Category spending
   const categorySpend = {}
   sharedExpenses.forEach(e => {
@@ -252,6 +267,129 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           </div>
         )}
       </div>
+
+      {/* ═══ SKULDSALDO ═══ */}
+      {memberCount > 1 && sharedTotal > 0 && (() => {
+        // Calculate debts: who owes whom
+        const debtors = memberBalances.filter(m => m.balance < -0.5) // owes money
+        const creditors = memberBalances.filter(m => m.balance > 0.5) // is owed money
+        const myBalance = memberBalances.find(m => m.id === user?.id)
+
+        // Simple settlement: pair debtors with creditors
+        const settlements = []
+        const dCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.balance) }))
+        const cCopy = creditors.map(c => ({ ...c, remaining: c.balance }))
+        for (const debtor of dCopy) {
+          for (const creditor of cCopy) {
+            if (debtor.remaining < 0.5 || creditor.remaining < 0.5) continue
+            const amount = Math.min(debtor.remaining, creditor.remaining)
+            settlements.push({ from: debtor, to: creditor, amount })
+            debtor.remaining -= amount
+            creditor.remaining -= amount
+          }
+        }
+
+        return (
+          <div style={{
+            background: '#0f172a',
+            border: `1px solid ${myBalance && Math.abs(myBalance.balance) > 0.5
+              ? myBalance.balance > 0 ? 'rgba(0,255,135,0.25)' : 'rgba(255,121,198,0.25)'
+              : '#1e293b'}`,
+            borderRadius: 20, padding: 16, marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1.5, marginBottom: 14 }}>
+              ⚖️ SKULDSALDO
+            </div>
+
+            {/* Per-member balance overview */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+              {memberBalances.map(m => {
+                const isMe = m.id === user?.id
+                const isPositive = m.balance > 0.5
+                const isNegative = m.balance < -0.5
+                return (
+                  <div key={m.id} style={{
+                    flex: 1, background: '#0b1120', borderRadius: 12, padding: '10px 6px',
+                    textAlign: 'center', border: `1px solid ${isMe ? 'rgba(0,240,255,0.2)' : '#1e293b'}`,
+                  }}>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: '50%', margin: '0 auto 6px',
+                      background: isMe ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : '#1e293b',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 11, fontWeight: 700, color: isMe ? '#020617' : '#64748b',
+                    }}>
+                      {m.name[0]?.toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: 11, color: isMe ? '#00f0ff' : '#e2e8f0', fontWeight: 600, marginBottom: 2 }}>
+                      {m.name}
+                    </div>
+                    <div style={{ fontSize: 9, color: '#475569', marginBottom: 4 }}>
+                      Lagt ut: {m.paid.toFixed(0)}{symbol}
+                    </div>
+                    <div style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700,
+                      color: isPositive ? '#00ff87' : isNegative ? '#ff79c6' : '#475569',
+                    }}>
+                      {isPositive ? '+' : ''}{m.balance.toFixed(0)}{symbol}
+                    </div>
+                    <div style={{ fontSize: 8, color: '#475569' }}>
+                      {isPositive ? 'ska få' : isNegative ? 'är skyldig' : 'kvitt'}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Settlement suggestions */}
+            {settlements.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: '#475569', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 8 }}>
+                  LÖSNING
+                </div>
+                {settlements.map((s, i) => {
+                  const isMe = s.from.id === user?.id || s.to.id === user?.id
+                  const iOwe = s.from.id === user?.id
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '10px 12px', marginBottom: 6,
+                      background: isMe
+                        ? iOwe ? 'rgba(255,121,198,0.06)' : 'rgba(0,255,135,0.06)'
+                        : '#0b1120',
+                      borderRadius: 12,
+                      border: `1px solid ${isMe
+                        ? iOwe ? 'rgba(255,121,198,0.15)' : 'rgba(0,255,135,0.15)'
+                        : '#1e293b'}`,
+                    }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
+                        {s.from.id === user?.id ? 'Du' : s.from.name}
+                      </span>
+                      <span style={{ fontSize: 11, color: '#475569' }}>→</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
+                        {s.to.id === user?.id ? 'Du' : s.to.name}
+                      </span>
+                      <div style={{ flex: 1 }} />
+                      <span style={{
+                        fontFamily: 'Orbitron, sans-serif', fontSize: 15, fontWeight: 700,
+                        color: iOwe ? '#ff79c6' : '#00ff87',
+                        textShadow: `0 0 8px ${iOwe ? 'rgba(255,121,198,0.4)' : 'rgba(0,255,135,0.4)'}`,
+                      }}>
+                        {s.amount.toFixed(0)}{symbol}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {settlements.length === 0 && (
+              <div style={{ textAlign: 'center', fontSize: 12, color: '#00ff87', fontWeight: 600 }}>
+                ✅ Alla är kvitt!
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ═══ BUDGETKOLL ═══ */}
       {myIncome > 0 && isCurrentMonth && (() => {
