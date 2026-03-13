@@ -67,7 +67,9 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
     // paid_amount = vad loggaren faktiskt betalade, annars fallback till amount (bakåtkompatibelt)
     memberPaid[e.user_id] = (memberPaid[e.user_id] || 0) + Number(e.paid_amount ?? e.amount)
   })
-  const fairSharePerPerson = sharedTotal / memberCount
+  // Fair share baseras på vad folk faktiskt betalat totalt, inte sharedTotal (som kan vara inflated vid "redan min del")
+  const totalActuallyPaid = Object.values(memberPaid).reduce((s, v) => s + v, 0)
+  const fairSharePerPerson = totalActuallyPaid / memberCount
   // Saldo = vad personen betalat - vad de borde ha betalat (positivt = har lagt ut för andra)
   const memberBalances = members.map(m => ({
     id: m.id,
