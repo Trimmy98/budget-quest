@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useBudget, useIncome } from '../../hooks/useExpenses'
@@ -17,10 +17,17 @@ export default function Personal({ selectedMonth }) {
   const { symbol } = useCurrency()
   const [simCut, setSimCut] = useState(0)
   const [simExtra, setSimExtra] = useState(0)
+  const [members, setMembers] = useState([])
+
+  useEffect(() => {
+    if (profile?.household_id) {
+      supabase.from('profiles').select('id').eq('household_id', profile.household_id)
+        .then(({ data }) => setMembers(data || []))
+    }
+  }, [profile])
 
   const personalCategories = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
   const myPersonalExpenses = expenses.filter(e => e.user_id === user?.id && e.expense_type === 'personal')
-  const memberCount = 1 // personal section shows individual
 
   const categorySpend = {}
   myPersonalExpenses.forEach(e => {
@@ -28,7 +35,7 @@ export default function Personal({ selectedMonth }) {
   })
 
   const sharedExpenses = expenses.filter(e => e.expense_type === 'shared')
-  const householdMemberCount = new Set(expenses.map(e => e.user_id)).size || 1
+  const householdMemberCount = members.length || 1
   const myShareOfShared = sharedExpenses.reduce((sum, e) => sum + Number(e.amount), 0) / householdMemberCount
   const myPersonalTotal = myPersonalExpenses.reduce((sum, e) => sum + Number(e.amount), 0)
   const mySaved = myIncome - myShareOfShared - myPersonalTotal
@@ -40,12 +47,12 @@ export default function Personal({ selectedMonth }) {
     if (!incomeInput) return
     setSaving(true)
     try {
-      await supabase.from('income').upsert({
+      await supabase.from('income').insert({
         household_id: profile.household_id,
         user_id: user.id,
         month: selectedMonth,
         amount: parseFloat(incomeInput),
-      }, { onConflict: 'user_id,month' })
+      })
       await refetchIncome()
       setSaved(true)
       setIncomeInput('')

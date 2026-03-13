@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
 import { useGamification } from './hooks/useGamification'
 import { getCurrentMonth } from './lib/constants'
+import { supabase } from './lib/supabase'
 
 import AuthPage from './components/auth/AuthPage'
 import Onboarding from './components/auth/Onboarding'
@@ -28,6 +29,7 @@ function AppContent() {
   const { gamification, allGamification, fetchGamification } = useGamification()
   const { expenses } = useExpenses(selectedMonth)
   const { budget } = useBudget()
+  const [householdMemberCount, setHouseholdMemberCount] = useState(1)
   const { myIncome } = useIncome(selectedMonth)
   const { symbol } = useCurrency()
   const location = useLocation()
@@ -40,6 +42,14 @@ function AppContent() {
   useEffect(() => {
     if (inviteFromUrl) sessionStorage.setItem('pending_invite', inviteFromUrl)
   }, [inviteFromUrl])
+
+  useEffect(() => {
+    if (profile?.household_id) {
+      supabase.from('profiles').select('id', { count: 'exact', head: true })
+        .eq('household_id', profile.household_id)
+        .then(({ count }) => setHouseholdMemberCount(count || 1))
+    }
+  }, [profile])
 
   if (loading) {
     return (
@@ -130,13 +140,13 @@ function AppContent() {
 
   // Mascot data
   const myExpenses = expenses.filter(e => e.user_id === user?.id)
-  const memberCount = new Set(expenses.map(e => e.user_id)).size || 1
-  const sharedTotal = expenses.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0) / memberCount
+  const sharedTotal = expenses.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0) / householdMemberCount
   const personalTotal = myExpenses.filter(e => e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
   const mascotSavingsRate = myIncome > 0 ? (myIncome - sharedTotal - personalTotal) / myIncome : 0
   const daysInMonth = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate()
-  const daysLeft = daysInMonth - new Date().getDate() + 1
-  const remainingBudget = (budget?.shared_categories || []).reduce((s, c) => s + c.budget, 0) / memberCount +
+  const isCurrentMonth = selectedMonth === getCurrentMonth()
+  const daysLeft = isCurrentMonth ? daysInMonth - new Date().getDate() + 1 : 0
+  const remainingBudget = (budget?.shared_categories || []).reduce((s, c) => s + c.budget, 0) / householdMemberCount +
     (budget?.personal_categories || []).reduce((s, c) => s + c.budget, 0) - sharedTotal - personalTotal
   const mascotPerDay = daysLeft > 0 ? remainingBudget / daysLeft : 0
 
