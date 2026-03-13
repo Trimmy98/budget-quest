@@ -20,6 +20,7 @@ export default function AddExpense({ onExpenseAdded }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [memberCount, setMemberCount] = useState(1)
+  const [splitMode, setSplitMode] = useState('full') // 'full' = jag betalade allt, 'mine' = redan min del
 
   useEffect(() => {
     if (profile?.household_id) {
@@ -36,7 +37,11 @@ export default function AddExpense({ onExpenseAdded }) {
   const categories = expenseType === 'shared' ? sharedCats : expenseType === 'personal' ? personalCats : []
 
   const parsedAmount = parseFloat(amount) || 0
-  const myShare = memberCount > 1 && expenseType === 'shared' ? parsedAmount / memberCount : parsedAmount
+  // 'full' = beloppet är totalt, delas på alla. 'mine' = redan min del, totalt = belopp * memberCount
+  const totalSharedAmount = expenseType === 'shared' && splitMode === 'mine' ? parsedAmount * memberCount : parsedAmount
+  const myShare = memberCount > 1 && expenseType === 'shared'
+    ? (splitMode === 'full' ? parsedAmount / memberCount : parsedAmount)
+    : parsedAmount
 
   async function handleSubmit() {
     if (!amount) {
@@ -77,11 +82,15 @@ export default function AddExpense({ onExpenseAdded }) {
         if (onExpenseAdded) onExpenseAdded()
       } else {
         const today = new Date().toISOString().split('T')[0]
+        // For shared expenses: always save the TOTAL amount so dashboard splits correctly
+        const saveAmount = expenseType === 'shared' && splitMode === 'mine'
+          ? parsed * memberCount
+          : parsed
         const { error: insertErr } = await supabase.from('expenses').insert({
           household_id: profile.household_id,
           user_id: user.id,
           date: today,
-          amount: parsed,
+          amount: saveAmount,
           description,
           category,
           expense_type: expenseType,
@@ -209,7 +218,38 @@ export default function AddExpense({ onExpenseAdded }) {
         </div>
       </div>
 
-      {/* Split indicator for shared expenses */}
+      {/* Split mode toggle for shared expenses */}
+      {expenseType === 'shared' && memberCount > 1 && (
+        <div style={{ marginBottom: parsedAmount > 0 ? 8 : 20 }}>
+          <div style={{
+            display: 'flex', background: '#0b1120', borderRadius: 10, padding: 3,
+            border: '1px solid #1e293b',
+          }}>
+            {[
+              { id: 'full', label: 'Jag betalade allt', icon: '💳' },
+              { id: 'mine', label: 'Redan min del', icon: '✂️' },
+            ].map(mode => (
+              <button
+                key={mode.id}
+                onClick={() => setSplitMode(mode.id)}
+                style={{
+                  flex: 1, padding: '9px 6px', border: 'none', borderRadius: 8,
+                  cursor: 'pointer', fontFamily: 'Outfit, sans-serif', fontWeight: 600,
+                  fontSize: 12, transition: 'all 0.2s',
+                  background: splitMode === mode.id
+                    ? 'linear-gradient(135deg, rgba(255,121,198,0.2), rgba(255,121,198,0.1))'
+                    : 'transparent',
+                  color: splitMode === mode.id ? '#ff79c6' : '#475569',
+                }}
+              >
+                {mode.icon} {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Split result indicator */}
       {expenseType === 'shared' && memberCount > 1 && parsedAmount > 0 && (
         <div style={{
           background: 'linear-gradient(135deg, rgba(255,121,198,0.08), rgba(255,121,198,0.03))',
@@ -217,22 +257,32 @@ export default function AddExpense({ onExpenseAdded }) {
           borderRadius: 12,
           padding: '10px 14px',
           marginBottom: 20,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
         }}>
-          <span style={{ fontSize: 13, color: '#94a3b8' }}>
-            👥 Delas på {memberCount} pers
-          </span>
-          <span style={{
-            fontFamily: 'Orbitron, sans-serif',
-            fontSize: 14,
-            fontWeight: 700,
-            color: '#ff79c6',
-            textShadow: '0 0 8px rgba(255,121,198,0.5)',
-          }}>
-            Din andel: {myShare.toFixed(0)} {symbol}
-          </span>
+          {splitMode === 'full' ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                💳 Totalt {parsedAmount.toFixed(0)} {symbol} delas på {memberCount}
+              </span>
+              <span style={{
+                fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700,
+                color: '#ff79c6', textShadow: '0 0 8px rgba(255,121,198,0.5)',
+              }}>
+                Din del: {myShare.toFixed(0)} {symbol}
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                ✂️ Din del: {parsedAmount.toFixed(0)} {symbol}
+              </span>
+              <span style={{
+                fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700,
+                color: '#475569',
+              }}>
+                Totalt: {totalSharedAmount.toFixed(0)} {symbol}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
