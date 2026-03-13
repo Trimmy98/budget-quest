@@ -268,14 +268,13 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
         )}
       </div>
 
-      {/* ═══ SKULDSALDO ═══ */}
+      {/* ═══ PENGAPUSSLET ═══ */}
       {memberCount > 1 && sharedTotal > 0 && (() => {
-        // Calculate debts: who owes whom
-        const debtors = memberBalances.filter(m => m.balance < -0.5) // owes money
-        const creditors = memberBalances.filter(m => m.balance > 0.5) // is owed money
+        const debtors = memberBalances.filter(m => m.balance < -0.5)
+        const creditors = memberBalances.filter(m => m.balance > 0.5)
         const myBalance = memberBalances.find(m => m.id === user?.id)
+        const allEven = debtors.length === 0 && creditors.length === 0
 
-        // Simple settlement: pair debtors with creditors
         const settlements = []
         const dCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.balance) }))
         const cCopy = creditors.map(c => ({ ...c, remaining: c.balance }))
@@ -289,107 +288,216 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           }
         }
 
+        // Fun messages
+        const puzzleMsg = allEven
+          ? 'Pusslet är komplett! Alla bitar passar.'
+          : myBalance?.balance > 50
+            ? `Någon har ett pusselbit-lån på ${Math.abs(myBalance.balance).toFixed(0)}${symbol}...`
+            : myBalance?.balance < -50
+              ? `Du har en liten pusselbit att lämna tillbaka...`
+              : 'Nästan ihopsatt!'
+
+        // Pick a fun emoji reaction
+        const puzzleEmoji = allEven ? '🎉' : myBalance?.balance > 0 ? '🤑' : myBalance?.balance < -0.5 ? '😅' : '🧩'
+
         return (
           <div style={{
-            background: '#0f172a',
-            border: `1px solid ${myBalance && Math.abs(myBalance.balance) > 0.5
-              ? myBalance.balance > 0 ? 'rgba(0,255,135,0.25)' : 'rgba(255,121,198,0.25)'
+            background: allEven
+              ? 'linear-gradient(135deg, rgba(0,255,135,0.06), rgba(0,240,255,0.03))'
+              : 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: `1px solid ${allEven ? 'rgba(0,255,135,0.2)' : myBalance && Math.abs(myBalance.balance) > 0.5
+              ? myBalance.balance > 0 ? 'rgba(0,255,135,0.2)' : 'rgba(255,121,198,0.2)'
               : '#1e293b'}`,
             borderRadius: 20, padding: 16, marginBottom: 14,
+            position: 'relative', overflow: 'hidden',
           }}>
-            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1.5, marginBottom: 14 }}>
-              ⚖️ SKULDSALDO
+            {/* Floating puzzle pieces animation */}
+            <div style={{
+              position: 'absolute', top: 8, right: 12, fontSize: 28, opacity: 0.12,
+              animation: 'puzzleFloat 4s ease-in-out infinite',
+            }}>🧩</div>
+            <div style={{
+              position: 'absolute', bottom: 10, right: 50, fontSize: 18, opacity: 0.08,
+              animation: 'puzzleFloat 5s ease-in-out infinite 1s',
+            }}>🧩</div>
+            <div style={{
+              position: 'absolute', top: 30, left: -5, fontSize: 20, opacity: 0.06,
+              animation: 'puzzleFloat 6s ease-in-out infinite 2s',
+            }}>🧩</div>
+
+            {/* Header with fun messaging */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, position: 'relative' }}>
+              <div style={{
+                fontSize: 32,
+                animation: allEven ? 'puzzleCelebrate 1s ease-in-out infinite' : 'puzzleBounce 2s ease-in-out infinite',
+                filter: allEven ? 'drop-shadow(0 0 8px rgba(0,255,135,0.6))' : 'none',
+              }}>
+                {puzzleEmoji}
+              </div>
+              <div>
+                <div style={{
+                  fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif',
+                  color: allEven ? '#00ff87' : '#e2e8f0',
+                  textShadow: allEven ? '0 0 15px rgba(0,255,135,0.5)' : 'none',
+                  letterSpacing: 1,
+                }}>
+                  PENGAPUSSLET
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  {allEven ? 'Alla bitar på plats!' : `${settlements.length} bit${settlements.length !== 1 ? 'ar' : ''} saknas`}
+                </div>
+              </div>
             </div>
 
-            {/* Per-member balance overview */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            {/* Per-member puzzle pieces */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14, position: 'relative' }}>
               {memberBalances.map(m => {
                 const isMe = m.id === user?.id
                 const isPositive = m.balance > 0.5
                 const isNegative = m.balance < -0.5
+                const pieceFit = !isPositive && !isNegative
+
                 return (
                   <div key={m.id} style={{
-                    flex: 1, background: '#0b1120', borderRadius: 12, padding: '10px 6px',
-                    textAlign: 'center', border: `1px solid ${isMe ? 'rgba(0,240,255,0.2)' : '#1e293b'}`,
+                    flex: 1, borderRadius: 14, padding: '12px 6px',
+                    textAlign: 'center',
+                    background: pieceFit
+                      ? 'linear-gradient(135deg, rgba(0,255,135,0.08), rgba(0,255,135,0.03))'
+                      : '#0b1120',
+                    border: `1px solid ${pieceFit ? 'rgba(0,255,135,0.2)'
+                      : isMe ? 'rgba(0,240,255,0.2)' : '#1e293b'}`,
+                    transition: 'all 0.3s ease',
                   }}>
-                    <div style={{
-                      width: 28, height: 28, borderRadius: '50%', margin: '0 auto 6px',
-                      background: isMe ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : '#1e293b',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 11, fontWeight: 700, color: isMe ? '#020617' : '#64748b',
-                    }}>
-                      {m.name[0]?.toUpperCase()}
+                    {/* Avatar with puzzle state */}
+                    <div style={{ position: 'relative', display: 'inline-block', marginBottom: 6 }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: '50%',
+                        background: isMe ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : '#1e293b',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700, color: isMe ? '#020617' : '#64748b',
+                      }}>
+                        {m.name[0]?.toUpperCase()}
+                      </div>
+                      {/* Status indicator */}
+                      <div style={{
+                        position: 'absolute', bottom: -2, right: -2,
+                        fontSize: 12, lineHeight: 1,
+                      }}>
+                        {pieceFit ? '✅' : isPositive ? '📤' : '📥'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: 11, color: isMe ? '#00f0ff' : '#e2e8f0', fontWeight: 600, marginBottom: 2 }}>
+                    <div style={{ fontSize: 11, color: isMe ? '#00f0ff' : '#e2e8f0', fontWeight: 600, marginBottom: 4 }}>
                       {m.name}
                     </div>
-                    <div style={{ fontSize: 9, color: '#475569', marginBottom: 4 }}>
-                      Lagt ut: {m.paid.toFixed(0)}{symbol}
-                    </div>
                     <div style={{
-                      fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700,
-                      color: isPositive ? '#00ff87' : isNegative ? '#ff79c6' : '#475569',
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 15, fontWeight: 700,
+                      color: pieceFit ? '#00ff87' : isPositive ? '#00ff87' : '#ff79c6',
+                      animation: pieceFit ? 'none' : isNegative ? 'puzzleNudge 3s ease-in-out infinite' : 'none',
                     }}>
-                      {isPositive ? '+' : ''}{m.balance.toFixed(0)}{symbol}
+                      {pieceFit ? '0' : `${isPositive ? '+' : ''}${m.balance.toFixed(0)}`}{symbol}
                     </div>
-                    <div style={{ fontSize: 8, color: '#475569' }}>
-                      {isPositive ? 'ska få' : isNegative ? 'är skyldig' : 'kvitt'}
+                    <div style={{ fontSize: 8, color: '#475569', marginTop: 2 }}>
+                      {pieceFit ? 'kvitt!' : isPositive ? 'lagt ut mer' : 'lagt ut mindre'}
                     </div>
                   </div>
                 )
               })}
             </div>
 
-            {/* Settlement suggestions */}
+            {/* Settlement: the missing pieces */}
             {settlements.length > 0 && (
               <div>
-                <div style={{ fontSize: 9, color: '#475569', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 8 }}>
-                  LÖSNING
+                <div style={{
+                  fontSize: 9, color: '#64748b', fontFamily: 'Orbitron, sans-serif',
+                  letterSpacing: 1, marginBottom: 8, textAlign: 'center',
+                }}>
+                  SÅ HÄR LÄGGER VI PUSSLET
                 </div>
                 {settlements.map((s, i) => {
-                  const isMe = s.from.id === user?.id || s.to.id === user?.id
                   const iOwe = s.from.id === user?.id
+                  const iReceive = s.to.id === user?.id
+                  const isMe = iOwe || iReceive
+
                   return (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '10px 12px', marginBottom: 6,
+                      padding: '12px 14px', marginBottom: 6,
                       background: isMe
-                        ? iOwe ? 'rgba(255,121,198,0.06)' : 'rgba(0,255,135,0.06)'
-                        : '#0b1120',
-                      borderRadius: 12,
+                        ? iOwe ? 'rgba(255,121,198,0.08)' : 'rgba(0,255,135,0.08)'
+                        : 'rgba(11,17,32,0.6)',
+                      borderRadius: 14,
                       border: `1px solid ${isMe
-                        ? iOwe ? 'rgba(255,121,198,0.15)' : 'rgba(0,255,135,0.15)'
-                        : '#1e293b'}`,
+                        ? iOwe ? 'rgba(255,121,198,0.2)' : 'rgba(0,255,135,0.2)'
+                        : 'rgba(30,41,59,0.6)'}`,
                     }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
-                        {s.from.id === user?.id ? 'Du' : s.from.name}
-                      </span>
-                      <span style={{ fontSize: 11, color: '#475569' }}>→</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
-                        {s.to.id === user?.id ? 'Du' : s.to.name}
-                      </span>
-                      <div style={{ flex: 1 }} />
-                      <span style={{
-                        fontFamily: 'Orbitron, sans-serif', fontSize: 15, fontWeight: 700,
+                      <div style={{
+                        fontSize: 20,
+                        animation: 'puzzleBounce 2s ease-in-out infinite',
+                      }}>
+                        {iOwe ? '🫣' : iReceive ? '🤩' : '🧩'}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
+                          {s.from.id === user?.id ? 'Du' : s.from.name}
+                          <span style={{ color: '#475569', fontWeight: 400 }}> skickar till </span>
+                          {s.to.id === user?.id ? 'Dig' : s.to.name}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#475569' }}>
+                          {iOwe ? 'Dags att swisha!' : iReceive ? 'Pengar på väg!' : 'Intern överf.'}
+                        </div>
+                      </div>
+                      <div style={{
+                        fontFamily: 'Orbitron, sans-serif', fontSize: 18, fontWeight: 900,
                         color: iOwe ? '#ff79c6' : '#00ff87',
-                        textShadow: `0 0 8px ${iOwe ? 'rgba(255,121,198,0.4)' : 'rgba(0,255,135,0.4)'}`,
+                        textShadow: `0 0 12px ${iOwe ? 'rgba(255,121,198,0.5)' : 'rgba(0,255,135,0.5)'}`,
                       }}>
                         {s.amount.toFixed(0)}{symbol}
-                      </span>
+                      </div>
                     </div>
                   )
                 })}
               </div>
             )}
 
-            {settlements.length === 0 && (
-              <div style={{ textAlign: 'center', fontSize: 12, color: '#00ff87', fontWeight: 600 }}>
-                ✅ Alla är kvitt!
+            {/* All even celebration */}
+            {allEven && (
+              <div style={{
+                textAlign: 'center', padding: '8px 0',
+                animation: 'puzzleCelebrate 2s ease-in-out infinite',
+              }}>
+                <div style={{ fontSize: 28, marginBottom: 4 }}>🎊</div>
+                <div style={{ fontSize: 13, color: '#00ff87', fontWeight: 700 }}>
+                  Alla pusselbitar passar!
+                </div>
+                <div style={{ fontSize: 11, color: '#475569' }}>
+                  Ingen behover swisha nagon
+                </div>
               </div>
             )}
           </div>
         )
       })()}
+
+      {/* Pengapusslet animations */}
+      <style>{`
+        @keyframes puzzleFloat {
+          0%, 100% { transform: translateY(0) rotate(0deg); }
+          50% { transform: translateY(-8px) rotate(10deg); }
+        }
+        @keyframes puzzleBounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-3px); }
+        }
+        @keyframes puzzleCelebrate {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.05); }
+        }
+        @keyframes puzzleNudge {
+          0%, 85%, 100% { transform: translateX(0); }
+          90% { transform: translateX(-3px); }
+          95% { transform: translateX(3px); }
+        }
+      `}</style>
 
       {/* ═══ BUDGETKOLL ═══ */}
       {myIncome > 0 && isCurrentMonth && (() => {
