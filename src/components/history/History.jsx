@@ -11,11 +11,18 @@ export default function History({ gamification, selectedMonth }) {
   const { user, profile } = useAuth()
   const { budget } = useBudget()
   const { symbol } = useCurrency()
-  const [tab, setTab] = useState('history')
+  const [tab, setTab] = useState('expenses')
   const [monthData, setMonthData] = useState([])
   const [loading, setLoading] = useState(true)
   const [members, setMembers] = useState([])
   const [expandedMonth, setExpandedMonth] = useState(null)
+
+  // Period-översikt state
+  const [periodMode, setPeriodMode] = useState('month') // 'day' | 'week' | 'month'
+  const [periodOffset, setPeriodOffset] = useState(0) // 0 = current, -1 = previous, etc.
+  const [periodExpenses, setPeriodExpenses] = useState([])
+  const [periodLoading, setPeriodLoading] = useState(false)
+  const [expandedGroup, setExpandedGroup] = useState(null)
 
   const sharedCats = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
   const personalCats = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
@@ -177,6 +184,128 @@ export default function History({ gamification, selectedMonth }) {
     }
   }
 
+  // ── Period-översikt: beräkna tidsspan och hämta data ──
+  function getPeriodRange(mode, offset) {
+    const now = new Date()
+    if (mode === 'month') {
+      const d = new Date(now.getFullYear(), now.getMonth() + offset, 1)
+      const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+      const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+      const end = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`
+      return { start, end }
+    }
+    if (mode === 'week') {
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const dayOfWeek = today.getDay() // 0=sun
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+      const monday = new Date(today)
+      monday.setDate(today.getDate() + mondayOffset + offset * 7)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      return { start: fmt(monday), end: fmt(sunday) }
+    }
+    // day
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
+    const fmt = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    return { start: fmt, end: fmt }
+  }
+
+  function formatPeriodLabel(mode, offset) {
+    const { start, end } = getPeriodRange(mode, offset)
+    const mNames = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december']
+    const mNamesShort = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+    if (mode === 'month') {
+      const [y, m] = start.split('-').map(Number)
+      return `${mNames[m - 1].charAt(0).toUpperCase() + mNames[m - 1].slice(1)} ${y}`
+    }
+    if (mode === 'week') {
+      const sd = new Date(start + 'T00:00:00')
+      const ed = new Date(end + 'T00:00:00')
+      // ISO week number
+      const jan4 = new Date(sd.getFullYear(), 0, 4)
+      const weekNum = Math.ceil(((sd - jan4) / 86400000 + jan4.getDay() + 1) / 7)
+      return `V.${weekNum} (${sd.getDate()} ${mNamesShort[sd.getMonth()]}–${ed.getDate()} ${mNamesShort[ed.getMonth()]})`
+    }
+    const d = new Date(start + 'T00:00:00')
+    return `${d.getDate()} ${mNames[d.getMonth()]} ${d.getFullYear()}`
+  }
+
+  useEffect(() => {
+    if (user && profile?.household_id && tab === 'expenses') {
+      fetchPeriodExpenses()
+    }
+  }, [user, profile?.household_id, tab, periodMode, periodOffset])
+
+  async function fetchPeriodExpenses() {
+    if (!profile?.household_id) return
+    setPeriodLoading(true)
+    try {
+      let { start, end } = getPeriodRange(periodMode, periodOffset)
+      // For month mode, fetch 3 months (prev, current, next) for navigation smoothness
+      if (periodMode === 'month') {
+        const prev = getPeriodRange('month', periodOffset - 2)
+        start = prev.start
+      }
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('household_id', profile.household_id)
+        .gte('date', start)
+        .lte('date', end)
+        .order('date', { ascending: false })
+      if (error) { console.error('fetchPeriodExpenses error:', error); Sentry.captureException(error) }
+      setPeriodExpenses(data || [])
+    } finally {
+      setPeriodLoading(false)
+    }
+  }
+
+  function groupExpenses(expenses, mode) {
+    const { start, end } = getPeriodRange(mode, periodOffset)
+    const filtered = expenses.filter(e => e.date >= start && e.date <= end)
+
+    if (mode === 'day') {
+      // Single group
+      return [{ key: start, label: formatPeriodLabel(mode, periodOffset), expenses: filtered }]
+    }
+    if (mode === 'week') {
+      // Group by day within the week
+      const groups = {}
+      const mNames = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december']
+      filtered.forEach(e => {
+        const key = e.date
+        if (!groups[key]) {
+          const d = new Date(e.date + 'T00:00:00')
+          groups[key] = { key, label: `${d.getDate()} ${mNames[d.getMonth()]}`, expenses: [] }
+        }
+        groups[key].expenses.push(e)
+      })
+      return Object.values(groups).sort((a, b) => b.key.localeCompare(a.key))
+    }
+    // month — group by week
+    const groups = {}
+    filtered.forEach(e => {
+      const d = new Date(e.date + 'T00:00:00')
+      const dayOfWeek = d.getDay() === 0 ? 6 : d.getDay() - 1 // monday = 0
+      const monday = new Date(d)
+      monday.setDate(d.getDate() - dayOfWeek)
+      const key = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`
+      if (!groups[key]) {
+        const sun = new Date(monday)
+        sun.setDate(monday.getDate() + 6)
+        const mNamesShort = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+        groups[key] = {
+          key,
+          label: `${monday.getDate()} ${mNamesShort[monday.getMonth()]}–${sun.getDate()} ${mNamesShort[sun.getMonth()]}`,
+          expenses: [],
+        }
+      }
+      groups[key].expenses.push(e)
+    })
+    return Object.values(groups).sort((a, b) => b.key.localeCompare(a.key))
+  }
+
   const unlocked = gamification?.achievements || []
   const xp = gamification?.xp || 0
   const monthsWithData = monthData.filter(m => m.hasData)
@@ -237,6 +366,7 @@ export default function History({ gamification, selectedMonth }) {
         marginBottom: 16, border: '1px solid #1e293b',
       }}>
         {[
+          { id: 'expenses', label: '📋 Utgifter' },
           { id: 'history', label: '📊 Statistik' },
           { id: 'badges', label: '🏆 Badges' },
         ].map(t => (
@@ -251,6 +381,274 @@ export default function History({ gamification, selectedMonth }) {
           </button>
         ))}
       </div>
+
+      {/* ═══ PERIOD-ÖVERSIKT (Utgifter-tab) ═══ */}
+      {tab === 'expenses' && (() => {
+        const groups = groupExpenses(periodExpenses, periodMode)
+        const { start, end } = getPeriodRange(periodMode, periodOffset)
+        const allFiltered = periodExpenses.filter(e => e.date >= start && e.date <= end)
+        const periodTotal = allFiltered.reduce((s, e) => s + Number(e.amount), 0)
+        const sharedInPeriod = allFiltered.filter(e => e.expense_type === 'shared')
+        const personalInPeriod = allFiltered.filter(e => e.expense_type === 'personal')
+        const sharedTotal = sharedInPeriod.reduce((s, e) => s + Number(e.amount), 0)
+        const personalTotal = personalInPeriod.reduce((s, e) => s + Number(e.amount), 0)
+        const memCount = members.length || 1
+
+        // Per-member totals for proportional bar
+        const memberTotals = {}
+        allFiltered.forEach(e => {
+          memberTotals[e.user_id] = (memberTotals[e.user_id] || 0) + Number(e.amount)
+        })
+
+        // Top 3 categories
+        const catTotals = {}
+        allFiltered.forEach(e => {
+          catTotals[e.category] = (catTotals[e.category] || 0) + Number(e.amount)
+        })
+        const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 3)
+
+        return (
+          <>
+            {/* Dag/Vecka/Månad toggle */}
+            <div style={{
+              display: 'flex', background: '#0b1120', borderRadius: 10, padding: 3,
+              marginBottom: 12, border: '1px solid #1e293b',
+            }}>
+              {[
+                { id: 'day', label: 'Dag' },
+                { id: 'week', label: 'Vecka' },
+                { id: 'month', label: 'Månad' },
+              ].map(m => (
+                <button key={m.id} onClick={() => { setPeriodMode(m.id); setPeriodOffset(0); setExpandedGroup(null) }} style={{
+                  flex: 1, padding: '8px 0', border: 'none', borderRadius: 8, cursor: 'pointer',
+                  fontFamily: 'Outfit, sans-serif', fontWeight: 600, fontSize: 13, transition: 'all 0.2s',
+                  background: periodMode === m.id ? 'linear-gradient(135deg, rgba(0,240,255,0.2), rgba(0,240,255,0.1))' : 'transparent',
+                  color: periodMode === m.id ? '#00f0ff' : '#64748b',
+                }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Navigation */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 14,
+            }}>
+              <button onClick={() => { setPeriodOffset(periodOffset - 1); setExpandedGroup(null) }} style={{
+                background: 'none', border: '1px solid #1e293b', borderRadius: 10, padding: '8px 14px',
+                color: '#94a3b8', fontSize: 16, cursor: 'pointer',
+              }}>
+                ←
+              </button>
+              <div style={{
+                fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700,
+                color: '#e2e8f0', textAlign: 'center',
+              }}>
+                {formatPeriodLabel(periodMode, periodOffset)}
+              </div>
+              <button onClick={() => { if (periodOffset < 0) { setPeriodOffset(periodOffset + 1); setExpandedGroup(null) } }} style={{
+                background: 'none', border: '1px solid #1e293b', borderRadius: 10, padding: '8px 14px',
+                color: periodOffset < 0 ? '#94a3b8' : '#1e293b', fontSize: 16,
+                cursor: periodOffset < 0 ? 'pointer' : 'default',
+              }}>
+                →
+              </button>
+            </div>
+
+            {periodLoading ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>Laddar...</div>
+            ) : allFiltered.length === 0 ? (
+              <div style={{
+                ...cardStyle, textAlign: 'center', padding: '30px 16px', color: '#475569',
+              }}>
+                Inga utgifter denna period
+              </div>
+            ) : (
+              <>
+                {/* Period-sammanfattning */}
+                <div style={{
+                  background: 'linear-gradient(135deg, #0f172a, #15132a)',
+                  border: '1px solid #1e293b', borderRadius: 20, padding: 16, marginBottom: 14,
+                }}>
+                  {/* Total */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Totalt</div>
+                    <div style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 28, fontWeight: 900,
+                      color: '#e2e8f0',
+                    }}>
+                      {periodTotal.toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
+                    </div>
+                  </div>
+
+                  {/* Proportionell bar: vem lade ut vad */}
+                  {memCount > 1 && periodTotal > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ borderRadius: 8, overflow: 'hidden', height: 24, display: 'flex', background: '#0b1120' }}>
+                        {Object.entries(memberTotals).map(([uid, total]) => {
+                          const member = members.find(m => m.id === uid)
+                          const pct = (total / periodTotal) * 100
+                          const isMe = uid === user?.id
+                          return (
+                            <div key={uid} style={{
+                              width: `${pct}%`, height: '100%',
+                              background: isMe ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : 'linear-gradient(135deg, #ff79c6, #ff5599)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 10, fontWeight: 700, color: '#020617',
+                              overflow: 'hidden', whiteSpace: 'nowrap',
+                              transition: 'width 0.3s ease',
+                            }}>
+                              {pct > 15 && `${member?.display_name || 'Okänd'} ${total.toFixed(0)}${symbol}`}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                        {Object.entries(memberTotals).map(([uid, total]) => {
+                          const member = members.find(m => m.id === uid)
+                          const isMe = uid === user?.id
+                          return (
+                            <div key={uid} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: 2, background: isMe ? '#00f0ff' : '#ff79c6' }} />
+                              <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                                {member?.display_name || 'Okänd'}: {total.toFixed(0)}{symbol}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Gemensamt vs personligt */}
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                    <div style={{
+                      flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                      border: '1px solid #1e293b', textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Gemensamt</div>
+                      <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#ff79c6' }}>
+                        {sharedTotal.toFixed(0)}{symbol}
+                      </div>
+                    </div>
+                    <div style={{
+                      flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                      border: '1px solid #1e293b', textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Personligt</div>
+                      <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#a78bfa' }}>
+                        {personalTotal.toFixed(0)}{symbol}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Topp 3 kategorier */}
+                  {topCats.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>Topp kategorier</div>
+                      {topCats.map(([catId, total]) => {
+                        const cat = getCatInfo(catId)
+                        return (
+                          <div key={catId} style={{
+                            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
+                          }}>
+                            <span style={{ fontSize: 14 }}>{cat.icon}</span>
+                            <span style={{ fontSize: 12, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
+                            <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
+                              {total.toFixed(0)}{symbol}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Grupperade utgifter */}
+                {groups.map(group => {
+                  const groupTotal = group.expenses.reduce((s, e) => s + Number(e.amount), 0)
+                  const isMonth = periodMode === 'month'
+                  const isExpanded = !isMonth || expandedGroup === group.key
+                  const visibleExpenses = isExpanded ? group.expenses : []
+
+                  return (
+                    <div key={group.key} style={{
+                      background: '#0f172a', border: '1px solid #1e293b',
+                      borderRadius: 16, padding: 14, marginBottom: 10,
+                    }}>
+                      {/* Group header */}
+                      <div
+                        onClick={() => isMonth && setExpandedGroup(expandedGroup === group.key ? null : group.key)}
+                        style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          cursor: isMonth ? 'pointer' : 'default',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>
+                            {group.label}
+                          </div>
+                          <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>
+                            {group.expenses.length} utgift{group.expenses.length !== 1 ? 'er' : ''}
+                            {isMonth && (isExpanded ? ' ▲' : ' ▼')}
+                          </div>
+                        </div>
+                        <div style={{
+                          fontFamily: 'Orbitron, sans-serif', fontSize: 16, fontWeight: 900, color: '#e2e8f0',
+                        }}>
+                          {groupTotal.toFixed(0)}{symbol}
+                        </div>
+                      </div>
+
+                      {/* Expense list */}
+                      {visibleExpenses.length > 0 && (
+                        <div style={{ marginTop: 10, borderTop: '1px solid #1e293b', paddingTop: 8 }}>
+                          {visibleExpenses.map(e => {
+                            const member = members.find(m => m.id === e.user_id)
+                            const isShared = e.expense_type === 'shared'
+                            return (
+                              <div key={e.id} style={{
+                                display: 'flex', alignItems: 'center', gap: 8,
+                                padding: '6px 0', borderBottom: '1px solid rgba(30,41,59,0.4)',
+                              }}>
+                                <span style={{ fontSize: 14, flexShrink: 0 }}>
+                                  {getCatInfo(e.category).icon}
+                                </span>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {e.description || '(ingen beskrivning)'}
+                                  </div>
+                                  <div style={{ fontSize: 10, color: '#475569' }}>
+                                    {e.user_id === user?.id ? 'Du' : member?.display_name || 'Okänd'}
+                                    <span style={{
+                                      marginLeft: 6, fontSize: 9, padding: '1px 5px', borderRadius: 4,
+                                      background: isShared ? 'rgba(255,121,198,0.12)' : 'rgba(167,139,250,0.12)',
+                                      color: isShared ? '#ff79c6' : '#a78bfa',
+                                    }}>
+                                      {isShared ? 'gemensam' : 'personlig'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div style={{
+                                  fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700,
+                                  color: '#e2e8f0', flexShrink: 0,
+                                }}>
+                                  {Number(e.amount).toFixed(0)}{symbol}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </>
+        )
+      })()}
 
       {tab === 'history' && (
         <>
