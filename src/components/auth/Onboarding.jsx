@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES, WEEKLY_CHALLENGES } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
+import Sentry from '../../lib/sentry'
 
 const styles = {
   container: {
@@ -203,12 +204,10 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
       const uid = await getAuthUid()
       if (!uid) throw new Error('Inte inloggad')
 
-      const { data: hh, error: hhErr } = await supabase
-        .from('households')
-        .select('*')
-        .eq('invite_code', code)
-        .single()
-      if (hhErr) throw new Error('Ogiltig inbjudningskod')
+      const { data: rows, error: hhErr } = await supabase
+        .rpc('lookup_household_by_invite', { invite_code_param: code })
+      const hh = rows?.[0]
+      if (hhErr || !hh) throw new Error('Ogiltig inbjudningskod')
 
       const { count } = await supabase
         .from('profiles')
@@ -254,7 +253,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
         personal_categories: DEFAULT_PERSONAL_CATEGORIES,
         weekly_challenge: challenge,
       })
-      if (budgetErr) console.error('Budget insert error:', budgetErr)
+      if (budgetErr) { console.error('Budget insert error:', budgetErr); Sentry.captureException(budgetErr) }
 
       setCreatedHousehold(hh)
       setStep(4)
@@ -280,7 +279,7 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
           user_id: uid,
           month,
           amount: parseFloat(income),
-        })
+        }, { onConflict: 'household_id,user_id,month' })
       }
       setStep(step + 1)
     } catch (err) {
@@ -290,9 +289,6 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
     }
   }
 
-  // Final step: save EVERYTHING about the profile in one single INSERT.
-  // We use INSERT (not upsert) because there should be no existing profile row.
-  // This avoids all the RLS upsert edge cases that were causing silent failures.
   async function handleFinish() {
     setLoading(true)
     setError('')
@@ -300,65 +296,85 @@ export default function Onboarding({ inviteCode, pendingInviteCode }) {
       const uid = await getAuthUid()
       if (!uid) throw new Error('Inte inloggad – försök logga ut och in igen')
 
-      const hh = createdHousehold || joinedHousehold
-      if (!hh) throw new Error('Inget hushåll – gå tillbaka och försök igen')
-
-      const role = householdChoice === 'create' ? 'admin' : 'member'
       const name = displayName.trim() || 'Användare'
 
-      // 1. Create the profile
-      const { error: profileErr } = await supabase.from('profiles').insert({
-        id: uid,
-        display_name: name,
-        household_id: hh.id,
-        role,
-        onboarding_complete: true,
-      })
+      if (joinedHousehold) {
+        // JOIN-flöde: använd transaktionell RPC (race-safe)
+        const inviteCode = effectiveInviteCode || joinedHousehold.invite_code
+        const { data: hh, error: joinErr } = await supabase.rpc('join_household', { invite: inviteCode })
+        if (joinErr) throw new Error(joinErr.message)
 
-      if (profileErr) {
-        // If profile already exists (e.g. from a previous partial attempt), update it instead
-        if (profileErr.code === '23505') {
-          const { error: updateErr } = await supabase
-            .from('profiles')
-            .update({
-              display_name: name,
-              household_id: hh.id,
-              role,
-              onboarding_complete: true,
-            })
-            .eq('id', uid)
-          if (updateErr) throw updateErr
-        } else {
-          throw profileErr
+        // Uppdatera display_name (RPC sätter 'Medlem' som default)
+        await supabase.from('profiles').update({ display_name: name }).eq('id', uid)
+
+        // Spara income om angiven
+        if (income) {
+          const now = new Date()
+          const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+          await supabase.from('income').upsert({
+            household_id: hh.id,
+            user_id: uid,
+            month,
+            amount: parseFloat(income),
+          }, { onConflict: 'household_id,user_id,month' }).then(({ error: incErr }) => {
+            if (incErr) { console.error('Income error:', incErr); Sentry.captureException(incErr) }
+          })
         }
-      }
+      } else if (createdHousehold) {
+        // CREATE-flöde: admin skapar hushållet, ingen race risk
+        const hh = createdHousehold
 
-      // 2. Create gamification record
-      await supabase.from('gamification').upsert({
-        user_id: uid,
-        household_id: hh.id,
-      }).then(({ error: gamErr }) => {
-        if (gamErr) console.error('Gamification error:', gamErr)
-      })
-
-      // 3. Save income if entered
-      if (income) {
-        const now = new Date()
-        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-        await supabase.from('income').upsert({
+        // 1. Create the profile
+        const { error: profileErr } = await supabase.from('profiles').insert({
+          id: uid,
+          display_name: name,
           household_id: hh.id,
-          user_id: uid,
-          month,
-          amount: parseFloat(income),
-        }).then(({ error: incErr }) => {
-          if (incErr) console.error('Income error:', incErr)
+          role: 'admin',
+          onboarding_complete: true,
         })
+
+        if (profileErr) {
+          if (profileErr.code === '23505') {
+            const { error: updateErr } = await supabase
+              .from('profiles')
+              .update({ display_name: name, household_id: hh.id, role: 'admin', onboarding_complete: true })
+              .eq('id', uid)
+            if (updateErr) throw updateErr
+          } else {
+            throw profileErr
+          }
+        }
+
+        // 2. Create gamification record
+        await supabase.from('gamification').upsert({
+          user_id: uid,
+          household_id: hh.id,
+        }, { onConflict: 'user_id' }).then(({ error: gamErr }) => {
+          if (gamErr) { console.error('Gamification error:', gamErr); Sentry.captureException(gamErr) }
+        })
+
+        // 3. Save income if entered
+        if (income) {
+          const now = new Date()
+          const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+          await supabase.from('income').upsert({
+            household_id: hh.id,
+            user_id: uid,
+            month,
+            amount: parseFloat(income),
+          }, { onConflict: 'household_id,user_id,month' }).then(({ error: incErr }) => {
+            if (incErr) { console.error('Income error:', incErr); Sentry.captureException(incErr) }
+          })
+        }
+      } else {
+        throw new Error('Inget hushåll – gå tillbaka och försök igen')
       }
 
-      // 4. Navigate to app – fresh page load picks up the new profile
+      // Rensa invite-state och navigera
+      sessionStorage.removeItem('pending_invite')
       window.location.href = '/'
     } catch (err) {
-      console.error('handleFinish error:', err)
+      console.error('handleFinish error:', err); Sentry.captureException(err)
       setError('Något gick fel: ' + (err?.message || 'Okänt fel'))
       setLoading(false)
     }
@@ -585,12 +601,10 @@ function JoinWithCode({ onJoined, onError }) {
       const uid = await getAuthUid()
       if (!uid) throw new Error('Inte inloggad')
 
-      const { data: hh, error: hhErr } = await supabase
-        .from('households')
-        .select('*')
-        .eq('invite_code', code.trim().toLowerCase())
-        .single()
-      if (hhErr) throw new Error('Ogiltig kod. Kontrollera och försök igen.')
+      const { data: rows, error: hhErr } = await supabase
+        .rpc('lookup_household_by_invite', { invite_code_param: code.trim().toLowerCase() })
+      const hh = rows?.[0]
+      if (hhErr || !hh) throw new Error('Ogiltig kod. Kontrollera och försök igen.')
 
       const { count } = await supabase
         .from('profiles')

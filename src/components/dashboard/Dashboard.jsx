@@ -6,26 +6,158 @@ import { getLevelInfo, getMonthGrade, getCurrentMonth, DEFAULT_SHARED_CATEGORIES
 import { useCurrency } from '../../hooks/useCurrency'
 import ProgressRing from '../shared/ProgressRing'
 import ProgressBar from '../shared/ProgressBar'
+import Sentry from '../../lib/sentry'
 
 export default function Dashboard({ gamification, allGamification, selectedMonth }) {
-  const { user, profile, household } = useAuth()
+  const { user, profile } = useAuth()
   const { expenses } = useExpenses(selectedMonth)
-  const { budget } = useBudget()
-  const { allIncome, myIncome, totalIncome } = useIncome(selectedMonth)
+  const { budget, refetch: refetchBudget } = useBudget()
+  const { allIncome, myIncome } = useIncome(selectedMonth)
   const { symbol } = useCurrency()
   const [members, setMembers] = useState([])
+  const [showPaymentForm, setShowPaymentForm] = useState(false)
+  const [submittingPayment, setSubmittingPayment] = useState(false)
+  const [debtPaymentAmount, setDebtPaymentAmount] = useState('')
+  const [debtPaymentNote, setDebtPaymentNote] = useState('')
+  const [paymentError, setPaymentError] = useState('')
+  const [paymentSuccess, setPaymentSuccess] = useState(false)
+  const [showAllPayments, setShowAllPayments] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [editingPaymentId, setEditingPaymentId] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editNote, setEditNote] = useState('')
+  const [showAllSharedExpenses, setShowAllSharedExpenses] = useState(false)
+  const [allTimeSharedExpenses, setAllTimeSharedExpenses] = useState([])
+
+  // Skulddata från calculate_debt() RPC
+  const [debtData, setDebtData] = useState(null)
 
   useEffect(() => {
     if (profile?.household_id) fetchMembers()
-  }, [profile])
+  }, [profile?.household_id])
+
+  useEffect(() => {
+    if (!profile?.household_id) return
+    fetchDebtData()
+    fetchAllTimeShared()
+    const expChannel = supabase
+      .channel(`alltime-shared-${profile.household_id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'expenses',
+        filter: `household_id=eq.${profile.household_id}`,
+      }, () => { fetchDebtData(); fetchAllTimeShared() })
+      .subscribe()
+    const debtChannel = supabase
+      .channel(`debt-payments-${profile.household_id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'debt_payments',
+        filter: `household_id=eq.${profile.household_id}`,
+      }, () => { fetchDebtData() })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(expChannel)
+      supabase.removeChannel(debtChannel)
+    }
+  }, [profile?.household_id])
+
+  async function fetchDebtData() {
+    const { data, error } = await supabase.rpc('calculate_debt')
+    if (error) { console.error('calculate_debt error:', error); Sentry.captureException(error) }
+    setDebtData(data || null)
+  }
+
+  async function fetchAllTimeShared() {
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('id, user_id, description, amount, date, created_at')
+      .eq('household_id', profile.household_id)
+      .eq('expense_type', 'shared')
+      .order('created_at', { ascending: false })
+    if (error) { console.error('fetchAllTimeShared error:', error); Sentry.captureException(error) }
+    setAllTimeSharedExpenses(data || [])
+  }
+
+  async function handleRegisterPayment(fromId, toId, maxDebt) {
+    const amount = parseFloat(debtPaymentAmount)
+    setPaymentError('')
+    if (!amount || amount <= 0) { setPaymentError('Ange ett belopp större än 0'); return }
+    if (amount > maxDebt + 0.01) { setPaymentError(`Beloppet kan inte vara mer än skulden (${Math.round(maxDebt)}${symbol})`); return }
+    setSubmittingPayment(true)
+    try {
+      const { error: rpcErr } = await supabase.rpc('register_debt_payment', {
+        from_user_id: fromId,
+        to_user_id: toId,
+        payment_amount: amount,
+        payment_note: debtPaymentNote.trim() || null,
+      })
+      if (rpcErr) throw rpcErr
+      setShowPaymentForm(false)
+      setDebtPaymentAmount('')
+      setDebtPaymentNote('')
+      setPaymentError('')
+      setPaymentSuccess(true)
+      setTimeout(() => setPaymentSuccess(false), 2000)
+      await fetchDebtData()
+    } catch (err) {
+      console.error('Kunde inte spara betalning:', err); Sentry.captureException(err)
+      setPaymentError('Något gick fel — försök igen')
+    } finally {
+      setSubmittingPayment(false)
+    }
+  }
+
+  async function handleDeletePayment(paymentId) {
+    const { error } = await supabase
+      .from('debt_payments')
+      .delete()
+      .eq('id', paymentId)
+    if (error) { console.error('deletePayment error:', error); Sentry.captureException(error) }
+    setConfirmDeleteId(null)
+    await fetchDebtData()
+  }
+
+  async function handleUpdatePayment(paymentId) {
+    const amount = parseFloat(editAmount)
+    if (!amount || amount <= 0) return
+    const { error } = await supabase.rpc('update_debt_payment', {
+      payment_id: paymentId,
+      new_amount: amount,
+      new_note: editNote.trim() || null,
+    })
+    if (error) { console.error('updatePayment error:', error); Sentry.captureException(error) }
+    setEditingPaymentId(null)
+    setEditAmount('')
+    setEditNote('')
+    await fetchDebtData()
+  }
 
   async function fetchMembers() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('household_id', profile.household_id)
+    if (error) { console.error('fetchMembers error:', error); Sentry.captureException(error) }
     setMembers(data || [])
   }
+
+  // Hämta förra månadens utgifter för jämförelse
+  const [prevExpenses, setPrevExpenses] = useState([])
+  useEffect(() => {
+    if (profile?.household_id && selectedMonth) {
+      const [y, m] = selectedMonth.split('-').map(Number)
+      const prevDate = new Date(y, m - 2, 1) // month - 1 (0-indexed) - 1 (previous)
+      const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`
+      const startDate = `${prevMonth}-01`
+      const endDate = new Date(prevDate.getFullYear(), prevDate.getMonth() + 1, 0).toISOString().split('T')[0]
+      supabase.from('expenses').select('*')
+        .eq('household_id', profile.household_id)
+        .gte('date', startDate).lte('date', endDate)
+        .then(({ data, error }) => {
+          if (error) { console.error('fetchPrevExpenses error:', error); Sentry.captureException(error) }
+          setPrevExpenses(data || [])
+        })
+    }
+  }, [profile, selectedMonth])
 
   const memberCount = members.length || 1
   const myExpenses = expenses.filter(e => e.user_id === user?.id)
@@ -61,23 +193,18 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
   const streak = gamification?.streak_current || 0
   const badgeCount = gamification?.achievements?.length || 0
 
-  // Skuldsaldo: vem har lagt ut vad av gemensamma utgifter
-  const memberPaid = {} // hur mycket varje person har BETALAT av gemensamma
-  sharedExpenses.forEach(e => {
-    // paid_amount = vad loggaren faktiskt betalade, annars fallback till amount (bakåtkompatibelt)
-    memberPaid[e.user_id] = (memberPaid[e.user_id] || 0) + Number(e.paid_amount ?? e.amount)
-  })
-  // Fair share baseras på vad folk faktiskt betalat totalt, inte sharedTotal (som kan vara inflated vid "redan min del")
-  const totalActuallyPaid = Object.values(memberPaid).reduce((s, v) => s + v, 0)
-  const fairSharePerPerson = totalActuallyPaid / memberCount
-  // Saldo = vad personen betalat - vad de borde ha betalat (positivt = har lagt ut för andra)
-  const memberBalances = members.map(m => ({
-    id: m.id,
+  // Skuldsaldo från server-side calculate_debt() RPC
+  const debtMembers = debtData?.members || []
+  const debtPayments = debtData?.payments || []
+  const memberBalances = debtMembers.map(m => ({
+    id: m.user_id,
     name: m.display_name || 'Okänd',
-    paid: memberPaid[m.id] || 0,
-    fairShare: fairSharePerPerson,
-    balance: (memberPaid[m.id] || 0) - fairSharePerPerson,
-  })).filter(m => m.paid > 0 || fairSharePerPerson > 0)
+    paid: m.my_shared_total,
+    fairShare: m.fair_share,
+    expenseBalance: m.expense_balance,
+    paymentAdjustment: m.payment_adjustment,
+    balance: m.net_balance,
+  }))
 
   // Category spending
   const categorySpend = {}
@@ -95,7 +222,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
       const member = members.find(m => m.id === g.user_id)
       const memberIncomeEntries = allIncome.filter(i => i.user_id === g.user_id)
       const memberIncome = memberIncomeEntries.reduce((sum, i) => sum + Number(i.amount), 0)
-      const memberShared = totalActuallyPaid / memberCount
+      const memberShared = sharedTotal / memberCount
       const memberPersonal = expenses.filter(e => e.user_id === g.user_id && e.expense_type === 'personal')
         .reduce((sum, e) => sum + Number(e.amount), 0)
       const saved = memberIncome - memberShared - memberPersonal
@@ -111,9 +238,11 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
     })
     .sort((a, b) => b.xp - a.xp)
 
-  const topXP = leaderboard[0]?.xp || 0
   const weeklyChallenge = budget?.weekly_challenge
-  const recentExpenses = expenses.slice(0, 5)
+  // Visa bara egna utgifter + delade (inte andras personliga)
+  const recentExpenses = expenses.filter(e =>
+    e.expense_type === 'shared' || e.user_id === user?.id
+  ).slice(0, 5)
   const allCats = [...sharedCats, ...personalCats]
 
   return (
@@ -187,7 +316,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
         <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
           {[
             { icon: '🔥', value: streak, label: 'Streak', color: '#ff79c6' },
-            { icon: '💰', value: `${perDay >= 0 ? '' : ''}${perDay.toFixed(0)}`, label: `${symbol}/dag kvar`, color: perDay >= 0 ? '#00ff87' : '#ff6b6b' },
+            { icon: '💰', value: `${perDay.toFixed(0)}`, label: `${symbol}/dag kvar`, color: perDay >= 0 ? '#00ff87' : '#ff6b6b' },
             { icon: '🏅', value: badgeCount, label: 'Badges', color: '#ffd93d' },
             { icon: '📊', value: `${(savingsRate * 100).toFixed(0)}%`, label: 'Sparkvot', color: savingsRate >= 0.2 ? '#00ff87' : savingsRate >= 0 ? '#ffd93d' : '#ff6b6b' },
           ].map(s => (
@@ -261,7 +390,8 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           const projectedSpend = dailyRate * daysInMonth
           const projectedSaved = myIncome - projectedSpend
           const projectedRate = myIncome > 0 ? projectedSaved / myIncome : 0
-          const trend = projectedSaved > mySaved ? 'up' : projectedSaved < mySaved * 0.5 ? 'down' : 'flat'
+          // Trend baseras på sparkvot: positiv = bra, negativ = dåligt
+          const trend = projectedRate >= 0.2 ? 'up' : projectedRate >= 0 ? 'flat' : 'down'
           return (
             <div style={{
               background: 'rgba(2,6,23,0.6)', borderRadius: 12, padding: '10px 12px',
@@ -307,233 +437,366 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
       </div>
 
       {/* ═══ PENGAPUSSLET ═══ */}
-      {memberCount > 1 && sharedTotal > 0 && (() => {
-        const debtors = memberBalances.filter(m => m.balance < -0.5)
-        const creditors = memberBalances.filter(m => m.balance > 0.5)
+      {memberCount > 1 && debtData && (() => {
         const myBalance = memberBalances.find(m => m.id === user?.id)
-        const allEven = debtors.length === 0 && creditors.length === 0
+        const otherMember = memberBalances.find(m => m.id !== user?.id)
+        const allEven = !myBalance || Math.abs(myBalance.balance) < 0.5
+        const iOwe = !allEven && myBalance.balance < -0.5
+        const absDebt = myBalance ? Math.abs(myBalance.balance) : 0
+        const debtor = iOwe ? myBalance : otherMember
+        const creditor = iOwe ? otherMember : myBalance
+        const visiblePayments = showAllPayments ? debtPayments : debtPayments.slice(0, 5)
+        const visibleExpenses = showAllSharedExpenses ? allTimeSharedExpenses : allTimeSharedExpenses.slice(0, 5)
 
-        const settlements = []
-        const dCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.balance) }))
-        const cCopy = creditors.map(c => ({ ...c, remaining: c.balance }))
-        for (const debtor of dCopy) {
-          for (const creditor of cCopy) {
-            if (debtor.remaining < 0.5 || creditor.remaining < 0.5) continue
-            const amount = Math.min(debtor.remaining, creditor.remaining)
-            settlements.push({ from: debtor, to: creditor, amount })
-            debtor.remaining -= amount
-            creditor.remaining -= amount
-          }
-        }
-
-        // Fun messages
-        const puzzleMsg = allEven
-          ? 'Pusslet är komplett! Alla bitar passar.'
-          : myBalance?.balance > 50
-            ? `Någon har ett pusselbit-lån på ${Math.abs(myBalance.balance).toFixed(0)}${symbol}...`
-            : myBalance?.balance < -50
-              ? `Du har en liten pusselbit att lämna tillbaka...`
-              : 'Nästan ihopsatt!'
-
-        // Pick a fun emoji reaction
-        const puzzleEmoji = allEven ? '🎉' : myBalance?.balance > 0 ? '🤑' : myBalance?.balance < -0.5 ? '😅' : '🧩'
-
-        return (
+        return <>
+          {/* ── 1. SKULD-KORT ── */}
           <div style={{
-            background: allEven
-              ? 'linear-gradient(135deg, rgba(0,255,135,0.06), rgba(0,240,255,0.03))'
-              : 'linear-gradient(135deg, #0f172a, #15132a)',
-            border: `1px solid ${allEven ? 'rgba(0,255,135,0.2)' : myBalance && Math.abs(myBalance.balance) > 0.5
-              ? myBalance.balance > 0 ? 'rgba(0,255,135,0.2)' : 'rgba(255,121,198,0.2)'
-              : '#1e293b'}`,
+            background: 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: `1px solid ${allEven ? 'rgba(0,255,135,0.2)' : iOwe ? 'rgba(255,121,198,0.2)' : 'rgba(0,255,135,0.2)'}`,
             borderRadius: 20, padding: 16, marginBottom: 14,
-            position: 'relative', overflow: 'hidden',
           }}>
-            {/* Floating puzzle pieces animation */}
-            <div style={{
-              position: 'absolute', top: 8, right: 12, fontSize: 28, opacity: 0.12,
-              animation: 'puzzleFloat 4s ease-in-out infinite',
-            }}>🧩</div>
-            <div style={{
-              position: 'absolute', bottom: 10, right: 50, fontSize: 18, opacity: 0.08,
-              animation: 'puzzleFloat 5s ease-in-out infinite 1s',
-            }}>🧩</div>
-            <div style={{
-              position: 'absolute', top: 30, left: -5, fontSize: 20, opacity: 0.06,
-              animation: 'puzzleFloat 6s ease-in-out infinite 2s',
-            }}>🧩</div>
-
-            {/* Header with fun messaging */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, position: 'relative' }}>
-              <div style={{
-                fontSize: 32,
-                animation: allEven ? 'puzzleCelebrate 1s ease-in-out infinite' : 'puzzleBounce 2s ease-in-out infinite',
-                filter: allEven ? 'drop-shadow(0 0 8px rgba(0,255,135,0.6))' : 'none',
-              }}>
-                {puzzleEmoji}
-              </div>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ fontSize: 28 }}>🧩</div>
               <div>
-                <div style={{
-                  fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif',
-                  color: allEven ? '#00ff87' : '#e2e8f0',
-                  textShadow: allEven ? '0 0 15px rgba(0,255,135,0.5)' : 'none',
-                  letterSpacing: 1,
-                }}>
+                <div style={{ fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif', color: '#e2e8f0', letterSpacing: 1 }}>
                   PENGAPUSSLET
                 </div>
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                  {allEven ? 'Alla bitar på plats!' : `${settlements.length} bit${settlements.length !== 1 ? 'ar' : ''} saknas`}
-                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Löpande skuldsaldo</div>
               </div>
             </div>
 
-            {/* Per-member puzzle pieces */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 14, position: 'relative' }}>
-              {memberBalances.map(m => {
-                const isMe = m.id === user?.id
-                const isPositive = m.balance > 0.5
-                const isNegative = m.balance < -0.5
-                const pieceFit = !isPositive && !isNegative
-
-                return (
-                  <div key={m.id} style={{
-                    flex: 1, borderRadius: 14, padding: '12px 6px',
-                    textAlign: 'center',
-                    background: pieceFit
-                      ? 'linear-gradient(135deg, rgba(0,255,135,0.08), rgba(0,255,135,0.03))'
-                      : '#0b1120',
-                    border: `1px solid ${pieceFit ? 'rgba(0,255,135,0.2)'
-                      : isMe ? 'rgba(0,240,255,0.2)' : '#1e293b'}`,
-                    transition: 'all 0.3s ease',
-                  }}>
-                    {/* Avatar with puzzle state */}
-                    <div style={{ position: 'relative', display: 'inline-block', marginBottom: 6 }}>
-                      <div style={{
-                        width: 32, height: 32, borderRadius: '50%',
-                        background: isMe ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : '#1e293b',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, color: isMe ? '#020617' : '#64748b',
-                      }}>
-                        {m.name[0]?.toUpperCase()}
-                      </div>
-                      {/* Status indicator */}
-                      <div style={{
-                        position: 'absolute', bottom: -2, right: -2,
-                        fontSize: 12, lineHeight: 1,
-                      }}>
-                        {pieceFit ? '✅' : isPositive ? '📤' : '📥'}
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: isMe ? '#00f0ff' : '#e2e8f0', fontWeight: 600, marginBottom: 4 }}>
-                      {m.name}
-                    </div>
-                    <div style={{
-                      fontFamily: 'Orbitron, sans-serif', fontSize: 15, fontWeight: 700,
-                      color: pieceFit ? '#00ff87' : isPositive ? '#00ff87' : '#ff79c6',
-                      animation: pieceFit ? 'none' : isNegative ? 'puzzleNudge 3s ease-in-out infinite' : 'none',
-                    }}>
-                      {pieceFit ? '0' : `${isPositive ? '+' : ''}${m.balance.toFixed(0)}`}{symbol}
-                    </div>
-                    <div style={{ fontSize: 8, color: '#475569', marginTop: 2 }}>
-                      {pieceFit ? 'kvitt!' : isPositive ? 'lagt ut mer' : 'lagt ut mindre'}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Settlement: the missing pieces */}
-            {settlements.length > 0 && (
-              <div>
-                <div style={{
-                  fontSize: 9, color: '#64748b', fontFamily: 'Orbitron, sans-serif',
-                  letterSpacing: 1, marginBottom: 8, textAlign: 'center',
-                }}>
-                  SÅ HÄR LÄGGER VI PUSSLET
-                </div>
-                {settlements.map((s, i) => {
-                  const iOwe = s.from.id === user?.id
-                  const iReceive = s.to.id === user?.id
-                  const isMe = iOwe || iReceive
-
-                  return (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '12px 14px', marginBottom: 6,
-                      background: isMe
-                        ? iOwe ? 'rgba(255,121,198,0.08)' : 'rgba(0,255,135,0.08)'
-                        : 'rgba(11,17,32,0.6)',
-                      borderRadius: 14,
-                      border: `1px solid ${isMe
-                        ? iOwe ? 'rgba(255,121,198,0.2)' : 'rgba(0,255,135,0.2)'
-                        : 'rgba(30,41,59,0.6)'}`,
-                    }}>
-                      <div style={{
-                        fontSize: 20,
-                        animation: 'puzzleBounce 2s ease-in-out infinite',
-                      }}>
-                        {iOwe ? '🫣' : iReceive ? '🤩' : '🧩'}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>
-                          {s.from.id === user?.id ? 'Du' : s.from.name}
-                          <span style={{ color: '#475569', fontWeight: 400 }}> skickar till </span>
-                          {s.to.id === user?.id ? 'Dig' : s.to.name}
-                        </div>
-                        <div style={{ fontSize: 10, color: '#475569' }}>
-                          {iOwe ? 'Dags att swisha!' : iReceive ? 'Pengar på väg!' : 'Intern överf.'}
-                        </div>
-                      </div>
-                      <div style={{
-                        fontFamily: 'Orbitron, sans-serif', fontSize: 18, fontWeight: 900,
-                        color: iOwe ? '#ff79c6' : '#00ff87',
-                        textShadow: `0 0 12px ${iOwe ? 'rgba(255,121,198,0.5)' : 'rgba(0,255,135,0.5)'}`,
-                      }}>
-                        {s.amount.toFixed(0)}{symbol}
-                      </div>
-                    </div>
-                  )
-                })}
+            {/* Bekräftelse-animation */}
+            {paymentSuccess && (
+              <div style={{ textAlign: 'center', padding: '12px 0', marginBottom: 10, animation: 'paymentConfirm 2s ease-out forwards' }}>
+                <div style={{ fontSize: 36, marginBottom: 4 }}>✅</div>
+                <div style={{ fontSize: 13, color: '#00ff87', fontWeight: 700 }}>Betalning registrerad!</div>
               </div>
             )}
 
-            {/* All even celebration */}
-            {allEven && (
-              <div style={{
-                textAlign: 'center', padding: '8px 0',
-                animation: 'puzzleCelebrate 2s ease-in-out infinite',
-              }}>
-                <div style={{ fontSize: 28, marginBottom: 4 }}>🎊</div>
-                <div style={{ fontSize: 13, color: '#00ff87', fontWeight: 700 }}>
-                  Alla pusselbitar passar!
+            {/* Skuld-siffra */}
+            {allEven ? (
+              <div style={{ textAlign: 'center', padding: '16px 0 12px' }}>
+                <div style={{ fontSize: 36, marginBottom: 8, animation: 'puzzleCelebrate 2s ease-in-out infinite' }}>🎊</div>
+                <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 22, fontWeight: 900, color: '#00ff87', textShadow: '0 0 20px rgba(0,255,135,0.5)', marginBottom: 6 }}>
+                  Ni är kvitt!
                 </div>
-                <div style={{ fontSize: 11, color: '#475569' }}>
-                  Ingen behöver swisha någon
+              </div>
+            ) : (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 4 }}>
+                  {iOwe
+                    ? <>Du skuldar <strong style={{ color: '#ff79c6' }}>{otherMember?.name || 'Okänd'}</strong></>
+                    : <><strong style={{ color: '#00ff87' }}>{otherMember?.name || 'Okänd'}</strong> skuldar dig</>
+                  }
+                </div>
+                <div style={{
+                  fontFamily: 'Orbitron, sans-serif', fontSize: 36, fontWeight: 900,
+                  color: iOwe ? '#ff79c6' : '#00ff87',
+                  textShadow: `0 0 20px ${iOwe ? 'rgba(255,121,198,0.5)' : 'rgba(0,255,135,0.5)'}`,
+                }}>
+                  {absDebt.toFixed(0)}{symbol}
+                </div>
+              </div>
+            )}
+
+            {/* Breakdown */}
+            <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 12, color: '#94a3b8', lineHeight: 1.8 }}>
+              <div>Du har lagt ut <strong style={{ color: '#e2e8f0' }}>{(myBalance?.paid || 0).toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}</strong></div>
+              <div>{otherMember?.name || 'Okänd'} har lagt ut <strong style={{ color: '#e2e8f0' }}>{(otherMember?.paid || 0).toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}</strong></div>
+              {(myBalance?.paymentAdjustment || 0) !== 0 && (
+                <div>Betalningar: <strong style={{ color: myBalance.paymentAdjustment > 0 ? '#00ff87' : '#ff79c6' }}>
+                  {myBalance.paymentAdjustment > 0 ? '+' : ''}{myBalance.paymentAdjustment.toFixed(0)}{symbol}
+                </strong></div>
+              )}
+            </div>
+
+            {/* Registrera betalning — ALLTID synlig knapp om skuld finns */}
+            {!allEven && !showPaymentForm && (
+              <button
+                onClick={() => { setShowPaymentForm(true); setPaymentError(''); setDebtPaymentAmount(''); setDebtPaymentNote('') }}
+                style={{
+                  width: '100%',
+                  background: 'linear-gradient(135deg, #00ff87, #00cc6a)',
+                  border: 'none',
+                  borderRadius: 12, padding: '12px 16px',
+                  color: '#020617', fontSize: 14, fontWeight: 700,
+                  fontFamily: 'Outfit, sans-serif', cursor: 'pointer',
+                  boxShadow: '0 0 16px rgba(0,255,135,0.3)',
+                }}
+              >
+                💸 Registrera betalning
+              </button>
+            )}
+
+            {/* Inline betalningsformulär */}
+            {!allEven && showPaymentForm && (
+              <div style={{
+                background: 'rgba(0,240,255,0.04)',
+                border: '1px solid rgba(0,240,255,0.2)', borderRadius: 14, padding: 14,
+              }}>
+                {/* Från → Till */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <div style={{ flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px', border: '1px solid #1e293b', textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>Från</div>
+                    <div style={{ fontSize: 13, color: '#ff79c6', fontWeight: 600 }}>
+                      {debtor?.id === user?.id ? 'Du' : debtor?.name || 'Okänd'}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 18, color: '#475569' }}>→</div>
+                  <div style={{ flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px', border: '1px solid #1e293b', textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>Till</div>
+                    <div style={{ fontSize: 13, color: '#00ff87', fontWeight: 600 }}>
+                      {creditor?.id === user?.id ? 'Du' : creditor?.name || 'Okänd'}
+                    </div>
+                  </div>
+                </div>
+                {/* Belopp */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+                  background: '#0b1120', borderRadius: 10, padding: '8px 12px',
+                  border: `1px solid ${paymentError ? 'rgba(255,107,107,0.4)' : 'rgba(0,240,255,0.2)'}`,
+                }}>
+                  <input type="number" placeholder="Belopp" value={debtPaymentAmount} autoFocus
+                    onChange={e => { setDebtPaymentAmount(e.target.value); setPaymentError('') }}
+                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontFamily: 'Orbitron, sans-serif', fontSize: 20, fontWeight: 700, color: '#00f0ff', textShadow: '0 0 10px rgba(0,240,255,0.4)' }}
+                  />
+                  <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, color: '#64748b' }}>{symbol}</span>
+                </div>
+                {paymentError && (
+                  <div style={{ fontSize: 11, color: '#ff6b6b', marginBottom: 8, padding: '0 4px' }}>{paymentError}</div>
+                )}
+                {/* Kommentar */}
+                <input type="text" placeholder="Kommentar (valfritt, t.ex. Swish mars)" value={debtPaymentNote}
+                  onChange={e => setDebtPaymentNote(e.target.value)}
+                  style={{
+                    width: '100%', background: '#0b1120', border: '1px solid #1e293b', borderRadius: 10,
+                    padding: '8px 12px', color: '#e2e8f0', fontFamily: 'Outfit, sans-serif', fontSize: 12, outline: 'none', marginBottom: 8, boxSizing: 'border-box',
+                  }}
+                />
+                {/* Snabbknappar */}
+                {absDebt > 1 && (
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                    <button onClick={() => { setDebtPaymentAmount(String(Math.round(absDebt / 2))); setPaymentError('') }}
+                      style={{ flex: 1, background: '#0b1120', border: '1px solid #1e293b', borderRadius: 8, padding: '6px 0', color: '#94a3b8', fontSize: 11, fontFamily: 'Outfit, sans-serif', cursor: 'pointer' }}>
+                      Halva ({Math.round(absDebt / 2)}{symbol})
+                    </button>
+                    <button onClick={() => { setDebtPaymentAmount(String(Math.round(absDebt))); setPaymentError('') }}
+                      style={{ flex: 1, background: '#0b1120', border: '1px solid rgba(0,255,135,0.2)', borderRadius: 8, padding: '6px 0', color: '#00ff87', fontSize: 11, fontFamily: 'Outfit, sans-serif', cursor: 'pointer', fontWeight: 600 }}>
+                      Hela ({Math.round(absDebt)}{symbol})
+                    </button>
+                  </div>
+                )}
+                {/* Knappar */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => { setShowPaymentForm(false); setDebtPaymentAmount(''); setDebtPaymentNote(''); setPaymentError('') }}
+                    style={{ flex: 1, background: '#1e293b', border: 'none', borderRadius: 10, padding: '10px 0', color: '#94a3b8', fontSize: 13, fontFamily: 'Outfit, sans-serif', cursor: 'pointer' }}>
+                    Avbryt
+                  </button>
+                  <button
+                    disabled={submittingPayment}
+                    onClick={() => debtor && creditor && handleRegisterPayment(debtor.id, creditor.id, absDebt)}
+                    style={{
+                      flex: 1,
+                      background: submittingPayment ? '#1e293b' : 'linear-gradient(135deg, #00ff87, #00cc6a)',
+                      border: 'none', borderRadius: 10, padding: '10px 0', color: '#020617', fontSize: 13,
+                      fontWeight: 700, fontFamily: 'Outfit, sans-serif', cursor: submittingPayment ? 'default' : 'pointer',
+                      boxShadow: '0 0 12px rgba(0,255,135,0.3)',
+                      opacity: submittingPayment ? 0.6 : 1,
+                    }}>
+                    {submittingPayment ? 'Sparar...' : '💸 Betala'}
+                  </button>
                 </div>
               </div>
             )}
           </div>
-        )
+
+          {/* ── 2. BETALNINGSHISTORIK ── */}
+          <div style={{
+            background: 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: '1px solid #1e293b',
+            borderRadius: 20, padding: 16, marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'Orbitron, sans-serif', color: '#e2e8f0', letterSpacing: 1, marginBottom: 12 }}>
+              BETALNINGAR
+            </div>
+            {debtPayments.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Inga betalningar registrerade</div>
+            ) : (
+              <>
+                {visiblePayments.map(p => {
+                  const fromName = members.find(m => m.id === p.from_user_id)?.display_name || 'Okänd'
+                  const toName = members.find(m => m.id === p.to_user_id)?.display_name || 'Okänd'
+                  const isEditing = editingPaymentId === p.id
+                  const isDeleting = confirmDeleteId === p.id
+                  const isMine = p.from_user_id === user?.id
+
+                  if (isEditing) {
+                    return (
+                      <div key={p.id} style={{
+                        padding: '10px 12px', marginBottom: 4, borderRadius: 10,
+                        background: 'rgba(0,240,255,0.06)', border: '1px solid rgba(0,240,255,0.2)',
+                      }}>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                          <input type="number" value={editAmount}
+                            onChange={e => setEditAmount(e.target.value)} autoFocus
+                            style={{ flex: 1, background: '#0b1120', border: '1px solid #1e293b', borderRadius: 8, padding: '6px 10px', color: '#00f0ff', fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, outline: 'none' }}
+                          />
+                          <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, color: '#64748b', alignSelf: 'center' }}>{symbol}</span>
+                        </div>
+                        <input type="text" value={editNote} placeholder="Kommentar (valfritt)"
+                          onChange={e => setEditNote(e.target.value)}
+                          style={{ width: '100%', background: '#0b1120', border: '1px solid #1e293b', borderRadius: 8, padding: '6px 10px', color: '#e2e8f0', fontFamily: 'Outfit, sans-serif', fontSize: 11, outline: 'none', marginBottom: 8, boxSizing: 'border-box' }}
+                        />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => handleUpdatePayment(p.id)}
+                            style={{ flex: 1, background: 'linear-gradient(135deg, #00ff87, #00cc6a)', border: 'none', borderRadius: 8, padding: '7px 0', color: '#020617', fontSize: 11, fontWeight: 700, fontFamily: 'Outfit, sans-serif', cursor: 'pointer' }}>
+                            Spara
+                          </button>
+                          <button onClick={() => { setEditingPaymentId(null); setEditAmount(''); setEditNote('') }}
+                            style={{ flex: 1, background: '#1e293b', border: 'none', borderRadius: 8, padding: '7px 0', color: '#94a3b8', fontSize: 11, fontFamily: 'Outfit, sans-serif', cursor: 'pointer' }}>
+                            Avbryt
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div key={p.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 10px', marginBottom: 4, borderRadius: 10,
+                      background: isDeleting ? 'rgba(255,107,107,0.08)' : '#0b112080',
+                      border: `1px solid ${isDeleting ? 'rgba(255,107,107,0.3)' : 'transparent'}`,
+                      transition: 'all 0.2s',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: '#e2e8f0' }}>
+                          {new Date(p.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })}
+                          <span style={{ color: '#475569' }}> — </span>
+                          {p.from_user_id === user?.id ? 'Du' : fromName}
+                          <span style={{ color: '#475569' }}> → </span>
+                          {p.to_user_id === user?.id ? 'Du' : toName}
+                          <span style={{ color: '#475569' }}>: </span>
+                          <strong style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, color: '#00ff87' }}>{Number(p.amount).toFixed(0)}{symbol}</strong>
+                        </div>
+                        {p.note && (
+                          <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>— {p.note}</div>
+                        )}
+                      </div>
+                      {isMine && !isDeleting && (
+                        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          <button onClick={() => { setEditingPaymentId(p.id); setEditAmount(String(Number(p.amount))); setEditNote(p.note || ''); setConfirmDeleteId(null) }}
+                            style={{ background: 'none', border: 'none', color: '#475569', fontSize: 12, cursor: 'pointer', padding: '2px 4px' }}
+                            title="Redigera">
+                            ✏️
+                          </button>
+                          <button onClick={() => { setConfirmDeleteId(p.id); setEditingPaymentId(null) }}
+                            style={{ background: 'none', border: 'none', color: '#475569', fontSize: 13, cursor: 'pointer', padding: '2px 4px' }}
+                            title="Radera">
+                            ✕
+                          </button>
+                        </div>
+                      )}
+                      {isDeleting && (
+                        <div style={{ flexShrink: 0 }}>
+                          <div style={{ fontSize: 10, color: '#ff6b6b', marginBottom: 4 }}>Radera?</div>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button onClick={() => handleDeletePayment(p.id)}
+                              style={{ background: '#ff6b6b', border: 'none', borderRadius: 6, color: '#fff', fontSize: 10, padding: '4px 8px', cursor: 'pointer', fontWeight: 600 }}>
+                              Ja
+                            </button>
+                            <button onClick={() => setConfirmDeleteId(null)}
+                              style={{ background: '#1e293b', border: 'none', borderRadius: 6, color: '#94a3b8', fontSize: 10, padding: '4px 8px', cursor: 'pointer' }}>
+                              Nej
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {debtPayments.length > 5 && (
+                  <button onClick={() => setShowAllPayments(!showAllPayments)}
+                    style={{
+                      width: '100%', marginTop: 4, background: 'none', border: '1px solid #1e293b',
+                      borderRadius: 8, padding: '6px 0', color: '#64748b', fontSize: 11,
+                      fontFamily: 'Outfit, sans-serif', cursor: 'pointer',
+                    }}>
+                    {showAllPayments ? 'Visa färre' : `Visa alla (${debtPayments.length} st)`}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── 3. SENASTE GEMENSAMMA UTGIFTER ── */}
+          <div style={{
+            background: 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: '1px solid #1e293b',
+            borderRadius: 20, padding: 16, marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'Orbitron, sans-serif', color: '#e2e8f0', letterSpacing: 1, marginBottom: 12 }}>
+              GEMENSAMMA UTGIFTER
+            </div>
+            {allTimeSharedExpenses.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Inga gemensamma utgifter ännu</div>
+            ) : (
+              <>
+                {visibleExpenses.map(e => {
+                  const expMember = members.find(m => m.id === e.user_id)
+                  return (
+                    <div key={e.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 10px', marginBottom: 4, borderRadius: 10,
+                      background: '#0b112080',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: '#e2e8f0' }}>
+                          {e.description || '(ingen beskrivning)'}
+                          <span style={{ color: '#475569' }}> — </span>
+                          <span style={{ color: e.user_id === user?.id ? '#00f0ff' : '#94a3b8' }}>
+                            {e.user_id === user?.id ? 'Du' : expMember?.display_name || 'Okänd'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>
+                          {new Date(e.date).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })}
+                        </div>
+                      </div>
+                      <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 13, fontWeight: 700, color: '#e2e8f0', flexShrink: 0 }}>
+                        {Number(e.amount).toFixed(0)}{symbol}
+                      </div>
+                    </div>
+                  )
+                })}
+                {allTimeSharedExpenses.length > 5 && (
+                  <button onClick={() => setShowAllSharedExpenses(!showAllSharedExpenses)}
+                    style={{
+                      width: '100%', marginTop: 4, background: 'none', border: '1px solid #1e293b',
+                      borderRadius: 8, padding: '6px 0', color: '#64748b', fontSize: 11,
+                      fontFamily: 'Outfit, sans-serif', cursor: 'pointer',
+                    }}>
+                    {showAllSharedExpenses ? 'Visa färre' : `Visa alla (${allTimeSharedExpenses.length} st)`}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </>
       })()}
 
       {/* Pengapusslet animations */}
       <style>{`
-        @keyframes puzzleFloat {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-8px) rotate(10deg); }
-        }
-        @keyframes puzzleBounce {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-3px); }
-        }
         @keyframes puzzleCelebrate {
           0%, 100% { transform: scale(1); }
           50% { transform: scale(1.05); }
         }
-        @keyframes puzzleNudge {
-          0%, 85%, 100% { transform: translateX(0); }
-          90% { transform: translateX(-3px); }
-          95% { transform: translateX(3px); }
+        @keyframes paymentConfirm {
+          0% { opacity: 0; transform: scale(0.8); }
+          20% { opacity: 1; transform: scale(1.1); }
+          30% { transform: scale(1); }
+          80% { opacity: 1; }
+          100% { opacity: 0; }
         }
       `}</style>
 
@@ -677,6 +940,108 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           </div>
         </div>
       )}
+
+      {/* ═══ MÅNADS-JÄMFÖRELSE ═══ */}
+      {prevExpenses.length > 0 && (() => {
+        // Förra månadens spending per kategori (min andel)
+        const prevMyExpenses = prevExpenses.filter(e => e.user_id === user?.id)
+        const prevShared = prevExpenses.filter(e => e.expense_type === 'shared')
+        const prevCatSpend = {}
+        prevMyExpenses.forEach(e => {
+          const amt = e.expense_type === 'shared' ? Number(e.amount) / memberCount : Number(e.amount)
+          prevCatSpend[e.category] = (prevCatSpend[e.category] || 0) + amt
+        })
+        // Komplettera med delade utgifter från andra medlemmar
+        prevShared.forEach(e => {
+          if (e.user_id !== user?.id) {
+            const amt = Number(e.amount) / memberCount
+            prevCatSpend[e.category] = (prevCatSpend[e.category] || 0) + amt
+          }
+        })
+        // Nuvarande månadens spending
+        const currCatSpend = {}
+        myExpenses.forEach(e => {
+          const amt = e.expense_type === 'shared' ? Number(e.amount) / memberCount : Number(e.amount)
+          currCatSpend[e.category] = (currCatSpend[e.category] || 0) + amt
+        })
+        sharedExpenses.forEach(e => {
+          if (e.user_id !== user?.id) {
+            const amt = Number(e.amount) / memberCount
+            currCatSpend[e.category] = (currCatSpend[e.category] || 0) + amt
+          }
+        })
+
+        const allCatIds = [...new Set([...Object.keys(prevCatSpend), ...Object.keys(currCatSpend)])]
+        const comparisons = allCatIds.map(catId => {
+          const cat = allCats.find(c => c.id === catId)
+          const prev = prevCatSpend[catId] || 0
+          const curr = currCatSpend[catId] || 0
+          const diff = prev > 0 ? ((curr - prev) / prev) * 100 : curr > 0 ? 100 : 0
+          return { catId, cat, prev, curr, diff }
+        }).filter(c => c.prev > 0 || c.curr > 0).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+
+        if (comparisons.length === 0) return null
+
+        const [py, pm] = (() => {
+          const [y, m] = selectedMonth.split('-').map(Number)
+          const d = new Date(y, m - 2, 1)
+          return [d.getFullYear(), d.getMonth() + 1]
+        })()
+        const prevLabel = `${py}-${String(pm).padStart(2, '0')}`
+
+        return (
+          <div style={{
+            background: '#0f172a',
+            border: '1px solid #1e293b',
+            borderRadius: 20,
+            padding: 16,
+            marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1.5, marginBottom: 4 }}>
+              📊 JÄMFÖRT MED {prevLabel}
+            </div>
+            <div style={{ fontSize: 10, color: '#334155', marginBottom: 12 }}>
+              Hur dina kategorier förändrats vs förra månaden
+            </div>
+            {comparisons.map(c => {
+              const isUp = c.diff > 5
+              const isDown = c.diff < -5
+              const arrow = isUp ? '↑' : isDown ? '↓' : '→'
+              const color = isUp ? '#ff6b6b' : isDown ? '#00ff87' : '#64748b'
+              return (
+                <div key={c.catId} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 0',
+                  borderBottom: '1px solid #1e293b20',
+                }}>
+                  <span style={{ fontSize: 16, width: 24, textAlign: 'center' }}>
+                    {c.cat?.icon || '📦'}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 500 }}>
+                      {c.cat?.name || c.catId}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#475569' }}>
+                      {c.prev.toFixed(0)}{symbol} → {c.curr.toFixed(0)}{symbol}
+                    </div>
+                  </div>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '3px 8px', borderRadius: 8,
+                    background: `${color}15`,
+                  }}>
+                    <span style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700, color,
+                    }}>
+                      {arrow}{Math.abs(c.diff).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
 
       {/* ═══ LEADERBOARD ═══ */}
       {leaderboard.length > 1 && (
@@ -834,7 +1199,8 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
         const topDay = days.find(d => dailySpend[d] === maxSpend)
         const avgSpend = Object.values(dailySpend).reduce((a, b) => a + b, 0) / days.length
         const activeDays = days.length
-        const quietDays = daysInMonth - activeDays
+        const totalDaysToCount = isCurrentMonth ? currentDay : daysInMonth
+        const quietDays = Math.max(totalDaysToCount - activeDays, 0)
 
         return (
           <div style={{
@@ -922,7 +1288,10 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           }, {})
         ).sort((a, b) => b[1] - a[1])[0]
 
-        const expenseDays = [...new Set(myExpenses.map(e => e.date))].length
+        // Räkna alla dagar där jag hade kostnad (inkl. delade loggade av andra)
+        const allMyExpenseDates = new Set(myExpenses.map(e => e.date))
+        sharedExpenses.forEach(e => { if (e.date) allMyExpenseDates.add(e.date) })
+        const expenseDays = allMyExpenseDates.size
         const avgPerExpenseDay = expenseDays > 0 ? totalSpent / expenseDays : 0
 
         let title, emoji, borderColor

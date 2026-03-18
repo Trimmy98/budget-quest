@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
@@ -11,16 +11,41 @@ import Onboarding from './components/auth/Onboarding'
 import JoinPage from './components/auth/JoinPage'
 import Header from './components/shared/Header'
 import BottomNav from './components/shared/BottomNav'
-import Dashboard from './components/dashboard/Dashboard'
-import AddExpense from './components/expenses/AddExpense'
-import Personal from './components/personal/Personal'
-import Quests from './components/quests/Quests'
-import Achievements from './components/achievements/Achievements'
-import History from './components/history/History'
-import Settings from './components/settings/Settings'
 import Mascot from './components/shared/Mascot'
+import ErrorBoundary from './components/shared/ErrorBoundary'
 import { useExpenses, useBudget, useIncome } from './hooks/useExpenses'
 import { useCurrency } from './hooks/useCurrency'
+import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from './lib/constants'
+
+// Lazy-loaded tab components
+const Dashboard = lazy(() => import('./components/dashboard/Dashboard'))
+const AddExpense = lazy(() => import('./components/expenses/AddExpense'))
+const Personal = lazy(() => import('./components/personal/Personal'))
+const Quests = lazy(() => import('./components/quests/Quests'))
+const Achievements = lazy(() => import('./components/achievements/Achievements'))
+const History = lazy(() => import('./components/history/History'))
+const Settings = lazy(() => import('./components/settings/Settings'))
+
+function LoadingSpinner() {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 48,
+    }}>
+      <div style={{
+        fontFamily: 'Orbitron, sans-serif',
+        fontSize: 14,
+        color: '#00f0ff',
+        textShadow: '0 0 10px rgba(0,240,255,0.5)',
+        animation: 'pulse 1.5s ease-in-out infinite',
+      }}>
+        Laddar...
+      </div>
+    </div>
+  )
+}
 
 function AppContent() {
   const { user, profile, loading } = useAuth()
@@ -49,7 +74,7 @@ function AppContent() {
         .eq('household_id', profile.household_id)
         .then(({ count }) => setHouseholdMemberCount(count || 1))
     }
-  }, [profile])
+  }, [profile?.household_id])
 
   if (loading) {
     return (
@@ -146,8 +171,10 @@ function AppContent() {
   const daysInMonth = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate()
   const isCurrentMonth = selectedMonth === getCurrentMonth()
   const daysLeft = isCurrentMonth ? daysInMonth - new Date().getDate() + 1 : 0
-  const remainingBudget = (budget?.shared_categories || []).reduce((s, c) => s + c.budget, 0) / householdMemberCount +
-    (budget?.personal_categories || []).reduce((s, c) => s + c.budget, 0) - sharedTotal - personalTotal
+  const mascotSharedCats = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
+  const mascotPersonalCats = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
+  const remainingBudget = mascotSharedCats.reduce((s, c) => s + c.budget, 0) / householdMemberCount +
+    mascotPersonalCats.reduce((s, c) => s + c.budget, 0) - sharedTotal - personalTotal
   const mascotPerDay = daysLeft > 0 ? remainingBudget / daysLeft : 0
 
   return (
@@ -161,7 +188,9 @@ function AppContent() {
     }}>
       <Header gamification={gamification} />
       <main style={{ flex: 1, overflowY: 'auto', paddingBottom: 70 }}>
-        {renderTab()}
+        <Suspense fallback={<LoadingSpinner />}>
+          {renderTab()}
+        </Suspense>
       </main>
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
       <Mascot
@@ -177,15 +206,17 @@ function AppContent() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <ToastProvider>
-          <Routes>
-            <Route path="/join/:code" element={<JoinPage />} />
-            <Route path="/*" element={<AppContent />} />
-          </Routes>
-        </ToastProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <ToastProvider>
+            <Routes>
+              <Route path="/join/:code" element={<JoinPage />} />
+              <Route path="/*" element={<AppContent />} />
+            </Routes>
+          </ToastProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }

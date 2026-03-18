@@ -4,7 +4,9 @@ import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useIncome } from '../../hooks/useExpenses'
 import { QUEST_MILESTONES, getMonthGrade, getCurrentMonth } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
+import { useWeeklyChallenges } from '../../hooks/useWeeklyChallenges'
 import ProgressBar from '../shared/ProgressBar'
+import Sentry from '../../lib/sentry'
 
 export default function Quests({ selectedMonth }) {
   const { user, profile } = useAuth()
@@ -13,16 +15,17 @@ export default function Quests({ selectedMonth }) {
   const { allIncome, myIncome } = useIncome(selectedMonth)
   const [members, setMembers] = useState([])
   const [monthHistory, setMonthHistory] = useState([])
+  const { challenges, weekStart, weekEnd, loading: challengesLoading } = useWeeklyChallenges()
 
   useEffect(() => {
     if (profile?.household_id) {
-      fetchMembers()
-      fetchMonthHistory()
+      fetchMembers().then(() => fetchMonthHistory())
     }
-  }, [profile])
+  }, [profile?.household_id])
 
   async function fetchMembers() {
-    const { data } = await supabase.from('profiles').select('*').eq('household_id', profile.household_id)
+    const { data, error } = await supabase.from('profiles').select('*').eq('household_id', profile.household_id)
+    if (error) { console.error('fetchMembers error:', error); Sentry.captureException(error) }
     setMembers(data || [])
   }
 
@@ -40,11 +43,14 @@ export default function Quests({ selectedMonth }) {
       const [year, mon] = m.split('-').map(Number)
       const endDate = new Date(year, mon, 0).toISOString().split('T')[0]
 
-      const [{ data: exps }, { data: inc }] = await Promise.all([
+      const [expRes, incRes] = await Promise.all([
         supabase.from('expenses').select('*').eq('household_id', profile.household_id)
           .gte('date', startDate).lte('date', endDate),
         supabase.from('income').select('*').eq('household_id', profile.household_id).eq('month', m),
       ])
+      if (expRes.error) { console.error(`fetchMonthHistory expenses ${m} error:`, expRes.error); Sentry.captureException(expRes.error) }
+      if (incRes.error) { console.error(`fetchMonthHistory income ${m} error:`, incRes.error); Sentry.captureException(incRes.error) }
+      const exps = expRes.data, inc = incRes.data
 
       const totalInc = (inc || []).reduce((s, i) => s + Number(i.amount), 0)
       const memberCount = members.length || 1
@@ -186,6 +192,86 @@ export default function Quests({ selectedMonth }) {
             )
           })}
         </div>
+      </div>
+
+      {/* Weekly Challenges */}
+      <div style={{
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: 20,
+        padding: 16,
+        marginBottom: 12,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1 }}>
+            🏅 VECKANS UTMANINGAR
+          </div>
+          <div style={{ fontSize: 11, color: '#475569' }}>
+            {weekStart} — {weekEnd}
+          </div>
+        </div>
+
+        {challengesLoading ? (
+          <div style={{ color: '#475569', fontSize: 13, textAlign: 'center', padding: 12 }}>Laddar...</div>
+        ) : challenges.length === 0 ? (
+          <div style={{ color: '#475569', fontSize: 13, textAlign: 'center', padding: 12 }}>Inga utmaningar denna vecka</div>
+        ) : (
+          challenges.map(ch => {
+            const pct = ch.target > 0 ? Math.min(ch.progress / ch.target, 1) : 0
+            const isDone = ch.completed
+            return (
+              <div key={ch.id} style={{
+                padding: '12px 0',
+                borderBottom: '1px solid #1e293b',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{
+                      fontSize: 16,
+                      filter: isDone ? 'none' : 'grayscale(0.3)',
+                    }}>
+                      {isDone ? '✅' : '🎯'}
+                    </span>
+                    <span style={{
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: isDone ? '#00ff87' : '#e2e8f0',
+                    }}>
+                      {ch.title}
+                    </span>
+                  </div>
+                  <span style={{
+                    fontFamily: 'Orbitron, sans-serif',
+                    fontSize: 11,
+                    color: isDone ? '#00ff87' : '#ffd93d',
+                  }}>
+                    {isDone ? `+${ch.xp} XP ✓` : `${ch.xp} XP`}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, paddingLeft: 24 }}>
+                  {ch.description}
+                </div>
+                <div style={{ paddingLeft: 24 }}>
+                  <ProgressBar
+                    value={ch.progress}
+                    max={ch.target}
+                    color={isDone ? '#00ff87' : '#ffd93d'}
+                    height={4}
+                  />
+                  <div style={{
+                    fontSize: 10,
+                    color: '#475569',
+                    marginTop: 2,
+                    textAlign: 'right',
+                    fontFamily: 'Orbitron, sans-serif',
+                  }}>
+                    {ch.progress}/{ch.target}
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
       </div>
 
       {/* Individual Savings */}

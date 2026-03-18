@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useBudget } from '../../hooks/useExpenses'
 import { useCurrency } from '../../hooks/useCurrency'
+import Sentry from '../../lib/sentry'
 import { ACHIEVEMENTS, getMonthGrade, getCurrentMonth, DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 import ProgressBar from '../shared/ProgressBar'
 
@@ -24,10 +25,11 @@ export default function History({ gamification, selectedMonth }) {
     if (user && profile?.household_id) {
       fetchMembers().then(() => fetchHistory())
     }
-  }, [user, profile])
+  }, [user, profile?.household_id])
 
   async function fetchMembers() {
-    const { data } = await supabase.from('profiles').select('*').eq('household_id', profile.household_id)
+    const { data, error } = await supabase.from('profiles').select('*').eq('household_id', profile.household_id)
+    if (error) { console.error('fetchMembers error:', error); Sentry.captureException(error) }
     setMembers(data || [])
     return data || []
   }
@@ -48,14 +50,16 @@ export default function History({ gamification, selectedMonth }) {
         const endDate = new Date(year, mon, 0).toISOString().split('T')[0]
         const daysInMonth = new Date(year, mon, 0).getDate()
 
-        const [{ data: exps }, { data: inc }] = await Promise.all([
+        const [expRes, incRes] = await Promise.all([
           supabase.from('expenses').select('*').eq('household_id', profile.household_id)
             .gte('date', startDate).lte('date', endDate),
           supabase.from('income').select('*').eq('household_id', profile.household_id).eq('month', m),
         ])
+        if (expRes.error) { console.error(`fetchHistory expenses ${m} error:`, expRes.error); Sentry.captureException(expRes.error) }
+        if (incRes.error) { console.error(`fetchHistory income ${m} error:`, incRes.error); Sentry.captureException(incRes.error) }
 
-        const expenses = exps || []
-        const income = inc || []
+        const expenses = expRes.data || []
+        const income = incRes.data || []
         const activeUserIds = new Set(expenses.map(e => e.user_id))
         income.forEach(i => activeUserIds.add(i.user_id))
         const memCount = Math.max(activeUserIds.size, 1)

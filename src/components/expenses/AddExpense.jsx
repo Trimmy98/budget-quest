@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
-import { useBudget } from '../../hooks/useExpenses'
+import { useBudget, useExpenses } from '../../hooks/useExpenses'
 import { useGamification } from '../../hooks/useGamification'
 import { useCurrency } from '../../hooks/useCurrency'
 import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES, getCurrentMonth } from '../../lib/constants'
@@ -9,6 +9,7 @@ import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES, getCurrentMonth
 export default function AddExpense({ onExpenseAdded }) {
   const { user, profile } = useAuth()
   const { budget } = useBudget()
+  const { expenses } = useExpenses()
   const { awardXP, updateStreak, checkExpenseCount } = useGamification()
   const { symbol } = useCurrency()
 
@@ -30,11 +31,29 @@ export default function AddExpense({ onExpenseAdded }) {
         .eq('household_id', profile.household_id)
         .then(({ count }) => setMemberCount(count || 1))
     }
-  }, [profile])
+  }, [profile?.household_id])
 
   const sharedCats = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
   const personalCats = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
   const categories = expenseType === 'shared' ? sharedCats : expenseType === 'personal' ? personalCats : []
+
+  // Beräkna spenderat per kategori för budget-varning
+  const categorySpend = {}
+  const currentMonth = getCurrentMonth()
+  expenses.filter(e => e.date?.startsWith(currentMonth) && e.expense_type === expenseType).forEach(e => {
+    // Personliga utgifter: räkna bara egna. Delade: räkna min andel av alla.
+    if (expenseType === 'personal' && e.user_id !== user?.id) return
+    const amt = e.expense_type === 'shared' ? Number(e.amount) / memberCount : Number(e.amount)
+    categorySpend[e.category] = (categorySpend[e.category] || 0) + amt
+  })
+
+  const daysInMonth = new Date(
+    parseInt(currentMonth.split('-')[0]),
+    parseInt(currentMonth.split('-')[1]),
+    0
+  ).getDate()
+  const currentDay = new Date().getDate()
+  const daysLeft = daysInMonth - currentDay + 1
 
   const parsedAmount = parseFloat(amount) || 0
   // 'full' = beloppet är totalt, delas på alla. 'mine' = redan min del, totalt = belopp * memberCount
@@ -71,7 +90,7 @@ export default function AddExpense({ onExpenseAdded }) {
           user_id: user.id,
           month,
           amount: parsed,
-          description: description || null,
+          description: description || '',
         })
         if (incErr) throw incErr
 
@@ -353,6 +372,67 @@ export default function AddExpense({ onExpenseAdded }) {
               </button>
             ))}
           </div>
+
+          {/* Budget-varning för vald kategori */}
+          {category && (() => {
+            const selectedCat = categories.find(c => c.id === category)
+            if (!selectedCat) return null
+            const catBudget = expenseType === 'shared' ? selectedCat.budget / memberCount : selectedCat.budget
+            const spent = categorySpend[category] || 0
+            const pct = catBudget > 0 ? spent / catBudget : 0
+            const remaining = catBudget - spent
+            const wouldBeSpent = spent + myShare
+            const wouldBePct = catBudget > 0 ? wouldBeSpent / catBudget : 0
+
+            let barColor = '#00ff87'
+            let icon = '✅'
+            let msg = `${remaining.toFixed(0)}${symbol} kvar`
+            if (pct >= 1) { barColor = '#ff6b6b'; icon = '🚨'; msg = `${Math.abs(remaining).toFixed(0)}${symbol} över budget!` }
+            else if (pct >= 0.85) { barColor = '#ff6b6b'; icon = '⚠️'; msg = `Bara ${remaining.toFixed(0)}${symbol} kvar — ${daysLeft} dagar kvar` }
+            else if (pct >= 0.65) { barColor = '#ffd93d'; icon = '💡'; msg = `${remaining.toFixed(0)}${symbol} kvar med ${daysLeft} dagar kvar` }
+
+            return (
+              <div style={{
+                background: pct >= 0.85
+                  ? 'rgba(255,107,107,0.08)'
+                  : pct >= 0.65
+                    ? 'rgba(255,217,61,0.08)'
+                    : 'rgba(0,255,135,0.05)',
+                border: `1px solid ${barColor}30`,
+                borderRadius: 12,
+                padding: '10px 14px',
+                marginTop: 8,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                    {icon} {selectedCat.icon} {selectedCat.name}
+                  </span>
+                  <span style={{
+                    fontFamily: 'Orbitron, sans-serif', fontSize: 11, fontWeight: 700, color: barColor,
+                  }}>
+                    {spent.toFixed(0)}/{catBudget.toFixed(0)}{symbol}
+                  </span>
+                </div>
+                <div style={{
+                  height: 4, background: '#1e293b', borderRadius: 2, overflow: 'hidden', marginBottom: 6,
+                }}>
+                  <div style={{
+                    height: '100%', width: `${Math.min(pct * 100, 100)}%`,
+                    background: barColor, borderRadius: 2, transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ fontSize: 11, color: barColor }}>{msg}</div>
+                {parsedAmount > 0 && wouldBePct > 1 && pct <= 1 && (
+                  <div style={{
+                    fontSize: 11, color: '#ff6b6b', marginTop: 4,
+                    fontWeight: 600,
+                  }}>
+                    ⚠️ Med detta köp hamnar du över budget!
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       )}
 

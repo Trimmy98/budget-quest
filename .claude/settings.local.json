@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp:*)",
+      "Bash(npm run:*)",
+      "mcp__supabase-db__search_objects",
+      "mcp__supabase-db__execute_sql",
+      "Bash(npx vitest:*)",
+      "Bash(npm install:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npm ls:*)",
+      "Bash(git add:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase-db"
+  ]
+}

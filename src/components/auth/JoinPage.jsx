@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
+import Sentry from '../../lib/sentry'
 
 export default function JoinPage() {
   const { code } = useParams()
@@ -14,12 +15,10 @@ export default function JoinPage() {
   useEffect(() => {
     async function handleJoin() {
       try {
-        const { data: hh, error } = await supabase
-          .from('households')
-          .select('*')
-          .eq('invite_code', code)
-          .single()
-        if (error) throw new Error('Ogiltig inbjudningslänk')
+        const { data: rows, error } = await supabase
+          .rpc('lookup_household_by_invite', { invite_code_param: code })
+        const hh = rows?.[0]
+        if (error || !hh) throw new Error('Ogiltig inbjudningslänk')
         setHousehold(hh)
 
         if (!user) {
@@ -41,9 +40,9 @@ export default function JoinPage() {
         }
 
         // No household yet - join directly
-        await joinHousehold(hh)
+        await joinHousehold()
       } catch (err) {
-        console.error('Join error:', err)
+        console.error('Join error:', err); Sentry.captureException(err)
         setStatus('error')
       }
     }
@@ -51,47 +50,20 @@ export default function JoinPage() {
     handleJoin()
   }, [code, user])
 
-  async function joinHousehold(hh) {
-    const targetHousehold = hh || household
-    if (!targetHousehold) return
-
+  async function joinHousehold() {
     try {
-      const { count } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('household_id', targetHousehold.id)
-      if (count >= targetHousehold.max_members) {
-        setStatus('full')
+      const { data, error } = await supabase.rpc('join_household', { invite: code })
+      if (error) {
+        if (error.message.includes('fullt')) {
+          setStatus('full')
+        } else {
+          console.error('Join error:', error); Sentry.captureException(error)
+          setStatus('error')
+        }
         return
       }
-
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', user.id)
-        .single()
-
-      if (existingProfile) {
-        await supabase.from('profiles').update({
-          household_id: targetHousehold.id,
-          role: 'member',
-          onboarding_complete: true,
-        }).eq('id', user.id)
-      } else {
-        await supabase.from('profiles').insert({
-          id: user.id,
-          display_name: user.email?.split('@')[0] || 'Medlem',
-          household_id: targetHousehold.id,
-          role: 'member',
-          onboarding_complete: true,
-        })
-      }
-
-      await supabase.from('gamification').upsert({
-        user_id: user.id,
-        household_id: targetHousehold.id,
-      }, { onConflict: 'user_id' })
-
+      setHousehold(data)
+      sessionStorage.removeItem('pending_invite')
       await refreshProfile()
       setStatus('joined')
       setTimeout(() => navigate('/'), 2000)
@@ -103,7 +75,7 @@ export default function JoinPage() {
 
   async function handleSwitch() {
     setSwitching(true)
-    await joinHousehold(household)
+    await joinHousehold()
     setSwitching(false)
   }
 

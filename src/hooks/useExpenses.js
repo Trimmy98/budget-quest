@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { getCurrentMonth } from '../lib/constants'
+import Sentry from '../lib/sentry'
 
 export function useExpenses(month) {
   const { user, profile } = useAuth()
@@ -12,10 +13,10 @@ export function useExpenses(month) {
   useEffect(() => {
     if (user && profile?.household_id) {
       fetchExpenses()
-      const subscription = subscribeToExpenses()
-      return () => subscription?.unsubscribe()
+      const channel = subscribeToExpenses()
+      return () => { if (channel) supabase.removeChannel(channel) }
     }
-  }, [user, profile, currentMonth])
+  }, [user, profile?.household_id, currentMonth])
 
   async function fetchExpenses() {
     setLoading(true)
@@ -24,7 +25,7 @@ export function useExpenses(month) {
       const [year, mon] = currentMonth.split('-').map(Number)
       const endDate = new Date(year, mon, 0).toISOString().split('T')[0]
 
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('expenses')
         .select('*')
         .eq('household_id', profile.household_id)
@@ -32,6 +33,7 @@ export function useExpenses(month) {
         .lte('date', endDate)
         .order('created_at', { ascending: false })
 
+      if (error) { console.error('fetchExpenses error:', error); Sentry.captureException(error) }
       setExpenses(data || [])
     } finally {
       setLoading(false)
@@ -40,7 +42,7 @@ export function useExpenses(month) {
 
   function subscribeToExpenses() {
     return supabase
-      .channel('expenses-realtime')
+      .channel(`expenses-${profile.household_id}-${currentMonth}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -61,14 +63,15 @@ export function useBudget() {
 
   useEffect(() => {
     if (profile?.household_id) fetchBudget()
-  }, [profile])
+  }, [profile?.household_id])
 
   async function fetchBudget() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('budgets')
       .select('*')
       .eq('household_id', profile.household_id)
       .single()
+    if (error && error.code !== 'PGRST116') { console.error('fetchBudget error:', error); Sentry.captureException(error) }
     setBudget(data)
   }
 
@@ -82,14 +85,15 @@ export function useIncome(month) {
 
   useEffect(() => {
     if (user && profile?.household_id) fetchIncome()
-  }, [user, profile, currentMonth])
+  }, [user?.id, profile?.household_id, currentMonth])
 
   async function fetchIncome() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('income')
       .select('*')
       .eq('household_id', profile.household_id)
       .eq('month', currentMonth)
+    if (error) { console.error('fetchIncome error:', error); Sentry.captureException(error) }
     setAllIncome(data || [])
   }
 

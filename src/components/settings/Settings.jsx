@@ -3,6 +3,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useBudget, useIncome, useExpenses } from '../../hooks/useExpenses'
 import { useCurrency } from '../../hooks/useCurrency'
+import { useToast } from '../../context/ToastContext'
+import Sentry from '../../lib/sentry'
 import { getCurrentMonth, DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 
 export default function Settings({ selectedMonth, onMonthChange }) {
@@ -11,6 +13,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   const { allIncome, myIncome, refetch: refetchIncome } = useIncome(selectedMonth)
   const { expenses, refetch: refetchExpenses } = useExpenses(selectedMonth)
   const { currency, symbol, setCurrency, currencies } = useCurrency()
+  const { addToast } = useToast()
   const [members, setMembers] = useState([])
   const [copied, setCopied] = useState(false)
   const [editingShared, setEditingShared] = useState(false)
@@ -38,7 +41,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
         autoLogSubscriptions(subs)
       }
     }
-  }, [user, profile])
+  }, [user, profile?.household_id])
 
   function saveSubs(subs) {
     setSubscriptions(subs)
@@ -71,15 +74,17 @@ export default function Settings({ selectedMonth, onMonthChange }) {
       const desc = `${sub.name} (prenumeration)`
       if (existingNames.has(desc)) continue // redan loggad
       const monthly = getMonthlyAmount(sub)
-      await supabase.from('expenses').insert({
+      const { error: subErr } = await supabase.from('expenses').insert({
         household_id: profile.household_id,
         user_id: user.id,
         date: firstOfMonth,
         amount: Math.round(monthly * 100) / 100,
+        paid_amount: Math.round(monthly * 100) / 100,
         description: desc,
         category: 'misc',
         expense_type: 'personal',
       })
+      if (subErr) { console.error('autoLogSubscription error:', subErr); Sentry.captureException(subErr) }
     }
   }
 
@@ -87,15 +92,17 @@ export default function Settings({ selectedMonth, onMonthChange }) {
     if (!profile?.household_id || !user?.id) return
     const today = new Date().toISOString().split('T')[0]
     const monthly = getMonthlyAmount(sub)
-    await supabase.from('expenses').insert({
+    const { error: logErr } = await supabase.from('expenses').insert({
       household_id: profile.household_id,
       user_id: user.id,
       date: today,
       amount: Math.round(monthly * 100) / 100,
+      paid_amount: Math.round(monthly * 100) / 100,
       description: `${sub.name} (prenumeration)`,
       category: 'misc',
       expense_type: 'personal',
     })
+    if (logErr) { console.error('logSubscriptionAsExpense error:', logErr); Sentry.captureException(logErr) }
   }
 
   function addSubscription() {
@@ -129,7 +136,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
 
   useEffect(() => {
     if (profile?.household_id) fetchMembers()
-  }, [profile])
+  }, [profile?.household_id])
 
   useEffect(() => {
     const sc = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
@@ -172,13 +179,24 @@ export default function Settings({ selectedMonth, onMonthChange }) {
     if (!isAdmin || memberId === user.id) return
     if (!confirm('Är du säker på att du vill ta bort denna person?')) return
     await supabase.from('profiles').update({ household_id: null, role: 'member' }).eq('id', memberId)
+    await supabase.from('gamification').delete().eq('user_id', memberId).eq('household_id', profile.household_id)
     await fetchMembers()
   }
 
   async function saveSharedBudget() {
     setSaving(true)
     try {
-      await supabase.from('budgets').update({ shared_categories: sharedCats }).eq('household_id', profile.household_id)
+      const query = supabase.from('budgets')
+        .update({ shared_categories: sharedCats })
+        .eq('household_id', profile.household_id)
+      const q = budget?.updated_at ? query.eq('updated_at', budget.updated_at) : query
+      const { data, error } = await q.select()
+      if (error) { console.error('saveSharedBudget error:', error); Sentry.captureException(error); return }
+      if (!data || data.length === 0) {
+        addToast('Budgeten har ändrats av någon annan — ladda om sidan', 'error', '⚠️')
+        await refetchBudget()
+        return
+      }
       await refetchBudget()
       setEditingShared(false)
     } finally {
@@ -189,7 +207,17 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   async function savePersonalBudget() {
     setSaving(true)
     try {
-      await supabase.from('budgets').update({ personal_categories: personalCats }).eq('household_id', profile.household_id)
+      const query = supabase.from('budgets')
+        .update({ personal_categories: personalCats })
+        .eq('household_id', profile.household_id)
+      const q = budget?.updated_at ? query.eq('updated_at', budget.updated_at) : query
+      const { data, error } = await q.select()
+      if (error) { console.error('savePersonalBudget error:', error); Sentry.captureException(error); return }
+      if (!data || data.length === 0) {
+        addToast('Budgeten har ändrats av någon annan — ladda om sidan', 'error', '⚠️')
+        await refetchBudget()
+        return
+      }
       await refetchBudget()
       setEditingPersonal(false)
     } finally {
@@ -199,13 +227,15 @@ export default function Settings({ selectedMonth, onMonthChange }) {
 
   async function deleteExpense(id) {
     if (!confirm('Ta bort denna loggning?')) return
-    await supabase.from('expenses').delete().eq('id', id)
+    const { error } = await supabase.from('expenses').delete().eq('id', id)
+    if (error) { console.error('deleteExpense error:', error); Sentry.captureException(error) }
     refetchExpenses()
   }
 
   async function deleteIncome(id) {
     if (!confirm('Ta bort denna inkomst?')) return
-    await supabase.from('income').delete().eq('id', id)
+    const { error } = await supabase.from('income').delete().eq('id', id)
+    if (error) { console.error('deleteIncome error:', error); Sentry.captureException(error) }
     refetchIncome()
   }
 
@@ -218,13 +248,13 @@ export default function Settings({ selectedMonth, onMonthChange }) {
     if (type === 'income') {
       await supabase.from('income').update({
         amount: parsedAmount,
-        description: description || null,
+        description: description || '',
       }).eq('id', id)
       refetchIncome()
     } else {
       const updateData = {
         amount: parsedAmount,
-        description: description || null,
+        description: description || '',
         category,
       }
       // Om paid_amount finns (gemensam utgift), spara den också

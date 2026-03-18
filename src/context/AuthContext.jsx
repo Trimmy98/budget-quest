@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import Sentry from '../lib/sentry'
 
 const AuthContext = createContext({})
 
@@ -56,7 +57,7 @@ export function AuthProvider({ children }) {
         .single()
 
       if (error && error.code !== 'PGRST116') {
-        console.error('fetchProfile error:', error)
+        console.error('fetchProfile error:', error); Sentry.captureException(error)
       }
 
       if (!data) {
@@ -80,7 +81,7 @@ export function AuthProvider({ children }) {
         setHousehold(null)
       }
     } catch (err) {
-      console.error('fetchProfile exception:', err)
+      console.error('fetchProfile exception:', err); Sentry.captureException(err)
     } finally {
       setLoading(false)
     }

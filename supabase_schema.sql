@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   user_id UUID NOT NULL REFERENCES auth.users(id),
   date DATE NOT NULL DEFAULT CURRENT_DATE,
   amount NUMERIC(10,2) NOT NULL,
+  paid_amount NUMERIC(10,2),  -- vad loggaren faktiskt betalade (för pengapusslet)
   description TEXT DEFAULT '',
   category TEXT NOT NULL,
   expense_type TEXT NOT NULL CHECK (expense_type IN ('shared', 'personal')),
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS income (
   user_id UUID NOT NULL REFERENCES auth.users(id),
   month TEXT NOT NULL,
   amount NUMERIC(10,2) NOT NULL,
-  UNIQUE(user_id, month)
+  description TEXT
 );
 
 -- Budgets
@@ -50,7 +51,9 @@ CREATE TABLE IF NOT EXISTS budgets (
   household_id UUID NOT NULL REFERENCES households(id) UNIQUE,
   shared_categories JSONB NOT NULL DEFAULT '[]',
   personal_categories JSONB NOT NULL DEFAULT '[]',
-  weekly_challenge JSONB DEFAULT NULL
+  weekly_challenge JSONB DEFAULT NULL,
+  debt_payments JSONB DEFAULT '[]',  -- swish-betalningar [{from, to, amount, date}]
+  debt_reset_date TIMESTAMPTZ  -- oanvänd i koden, finns i prod
 );
 
 -- Gamification
@@ -96,6 +99,19 @@ CREATE POLICY "households_insert" ON households
 CREATE POLICY "households_update" ON households
   FOR UPDATE USING (admin_id = auth.uid());
 
+-- Secure invite lookup via RPC (replaces the old USING(true) policy)
+CREATE OR REPLACE FUNCTION lookup_household_by_invite(invite_code_param TEXT)
+RETURNS TABLE (id UUID, name TEXT, max_members INTEGER, invite_code TEXT)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT h.id, h.name, h.max_members, h.invite_code
+  FROM households h
+  WHERE h.invite_code = invite_code_param
+  LIMIT 1;
+$$;
+
 -- Profiles policies
 CREATE POLICY "profiles_select" ON profiles
   FOR SELECT USING (
@@ -115,6 +131,12 @@ CREATE POLICY "expenses_select" ON expenses
 
 CREATE POLICY "expenses_insert" ON expenses
   FOR INSERT WITH CHECK (
+    household_id = get_my_household_id()
+    AND user_id = auth.uid()
+  );
+
+CREATE POLICY "expenses_update" ON expenses
+  FOR UPDATE USING (
     household_id = get_my_household_id()
     AND user_id = auth.uid()
   );
@@ -170,7 +192,3 @@ CREATE POLICY "gamification_update" ON gamification
 
 -- Enable Realtime on expenses
 ALTER PUBLICATION supabase_realtime ADD TABLE expenses;
-
--- Allow unauthenticated read of households by invite_code (for joining)
-CREATE POLICY "households_select_by_invite" ON households
-  FOR SELECT USING (true);

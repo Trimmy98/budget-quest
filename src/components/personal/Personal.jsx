@@ -4,7 +4,9 @@ import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useBudget, useIncome } from '../../hooks/useExpenses'
 import { getMonthGrade, getCurrentMonth, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
+import { useSavingsGoals } from '../../hooks/useSavingsGoals'
 import ProgressBar from '../shared/ProgressBar'
+import Sentry from '../../lib/sentry'
 
 export default function Personal({ selectedMonth }) {
   const { user, profile } = useAuth()
@@ -15,16 +17,27 @@ export default function Personal({ selectedMonth }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const { symbol } = useCurrency()
+  const { goals, addGoal, deleteGoal } = useSavingsGoals()
   const [simCut, setSimCut] = useState(0)
   const [simExtra, setSimExtra] = useState(0)
   const [members, setMembers] = useState([])
+  const [savingsGoalInput, setSavingsGoalInput] = useState('')
+  const [goalNameInput, setGoalNameInput] = useState('')
+  const [goalSaved, setGoalSaved] = useState(false)
 
   useEffect(() => {
     if (profile?.household_id) {
       supabase.from('profiles').select('id').eq('household_id', profile.household_id)
-        .then(({ data }) => setMembers(data || []))
+        .then(({ data, error }) => {
+          if (error) { console.error('fetchMembers error:', error); Sentry.captureException(error) }
+          setMembers(data || [])
+        })
     }
-  }, [profile])
+  }, [profile?.household_id])
+
+  // Primärt sparmål (första i listan)
+  const primaryGoal = goals[0] || null
+  const savingsGoal = primaryGoal ? String(primaryGoal.target_amount) : ''
 
   const personalCategories = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
   const myPersonalExpenses = expenses.filter(e => e.user_id === user?.id && e.expense_type === 'personal')
@@ -47,12 +60,16 @@ export default function Personal({ selectedMonth }) {
     if (!incomeInput) return
     setSaving(true)
     try {
-      await supabase.from('income').insert({
+      const { error } = await supabase.from('income').insert({
         household_id: profile.household_id,
         user_id: user.id,
         month: selectedMonth,
         amount: parseFloat(incomeInput),
       })
+      if (error) {
+        console.error('handleSaveIncome error:', error); Sentry.captureException(error)
+        return
+      }
       await refetchIncome()
       setSaved(true)
       setIncomeInput('')
@@ -509,6 +526,269 @@ export default function Personal({ selectedMonth }) {
           </div>
         )
       })()}
+
+      {/* ═══ SPARMÅL MED TIDSLINJE ═══ */}
+      <div style={{
+        background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+        border: '1px solid rgba(255,217,61,0.2)',
+        borderRadius: 20,
+        padding: 16,
+        marginTop: 12,
+      }}>
+        <div style={{ fontSize: 11, color: '#ffd93d', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 12 }}>
+          🎯 SPARMÅL
+        </div>
+
+        {/* Mål-input */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              placeholder="Namn (t.ex. Semester)"
+              value={goalNameInput}
+              onChange={e => setGoalNameInput(e.target.value)}
+              style={{
+                flex: 1, background: '#0b1120', border: '1px solid #1e293b',
+                borderRadius: 10, padding: '10px 14px', color: '#e2e8f0',
+                fontFamily: 'Outfit, sans-serif', fontSize: 13, outline: 'none',
+              }}
+              onFocus={e => e.target.style.borderColor = '#ffd93d'}
+              onBlur={e => e.target.style.borderColor = '#1e293b'}
+            />
+            <input
+              type="number"
+              placeholder={`Belopp (${symbol})`}
+              value={savingsGoalInput}
+              onChange={e => setSavingsGoalInput(e.target.value)}
+              style={{
+                width: 120, background: '#0b1120', border: '1px solid #1e293b',
+                borderRadius: 10, padding: '10px 14px', color: '#e2e8f0',
+                fontFamily: 'Orbitron, sans-serif', fontSize: 14, outline: 'none',
+              }}
+              onFocus={e => e.target.style.borderColor = '#ffd93d'}
+              onBlur={e => e.target.style.borderColor = '#1e293b'}
+            />
+            <button
+              onClick={async () => {
+                if (savingsGoalInput) {
+                  await addGoal({
+                    name: goalNameInput.trim() || 'Mitt sparmål',
+                    target_amount: parseFloat(savingsGoalInput),
+                  })
+                  setSavingsGoalInput('')
+                  setGoalNameInput('')
+                  setGoalSaved(true)
+                  setTimeout(() => setGoalSaved(false), 2000)
+                }
+              }}
+              disabled={!savingsGoalInput}
+              style={{
+                background: goalSaved ? '#ffd93d' : 'linear-gradient(135deg, #ffd93d, #f0c020)',
+                border: 'none', borderRadius: 10, padding: '0 14px',
+                color: '#020617', fontFamily: 'Outfit, sans-serif', fontWeight: 700,
+                fontSize: 13, cursor: 'pointer',
+                boxShadow: '0 0 10px rgba(255,217,61,0.2)',
+                opacity: !savingsGoalInput ? 0.5 : 1,
+              }}
+            >
+              {goalSaved ? '✓' : '🎯'}
+            </button>
+          </div>
+        </div>
+
+        {/* Tidslinje och progress per mål */}
+        {goals.length > 0 && myIncome > 0 && goals.map(goalObj => {
+          const goal = Number(goalObj.target_amount)
+          if (!goal || goal <= 0) return null
+          const monthlySavings = mySaved
+          const remaining = goal - Number(goalObj.current_amount)
+          const monthsToGoal = monthlySavings > 0 ? Math.ceil(remaining / monthlySavings) : null
+          const progressPct = goal > 0 ? Number(goalObj.current_amount) / goal : 0
+
+          const allMilestones = [
+            { months: 1, label: '1 mån' },
+            { months: 3, label: '3 mån' },
+            { months: 6, label: '6 mån' },
+            { months: 12, label: '1 år' },
+            { months: 24, label: '2 år' },
+            { months: 60, label: '5 år' },
+          ]
+          const milestones = monthsToGoal
+            ? allMilestones.filter(m => m.months <= Math.max(monthsToGoal * 1.5, 6)).slice(0, 5)
+            : allMilestones.slice(0, 4)
+
+          return (
+            <div key={goalObj.id} style={{ marginBottom: goals.length > 1 ? 14 : 0 }}>
+              {/* Mål-display */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: '#0b112080', borderRadius: 12, padding: '12px 14px', marginBottom: 12,
+              }}>
+                <div>
+                  <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>{goalObj.name}</div>
+                  <div style={{
+                    fontFamily: 'Orbitron, sans-serif', fontSize: 22, fontWeight: 900,
+                    color: '#ffd93d', textShadow: '0 0 15px rgba(255,217,61,0.4)',
+                  }}>
+                    {goal.toLocaleString()}{symbol}
+                  </div>
+                  {goalObj.deadline && (
+                    <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                      Deadline: {goalObj.deadline}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>Månadssparande</div>
+                  <div style={{
+                    fontFamily: 'Orbitron, sans-serif', fontSize: 16, fontWeight: 700,
+                    color: monthlySavings > 0 ? '#00ff87' : '#ff6b6b',
+                  }}>
+                    {monthlySavings >= 0 ? '+' : ''}{monthlySavings.toFixed(0)}{symbol}
+                  </div>
+                </div>
+              </div>
+
+              {/* Saved progress bar */}
+              {Number(goalObj.current_amount) > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>Sparat hittills</span>
+                    <span style={{ fontSize: 11, color: '#ffd93d', fontFamily: 'Orbitron, sans-serif' }}>
+                      {Number(goalObj.current_amount).toLocaleString()}/{goal.toLocaleString()}{symbol}
+                    </span>
+                  </div>
+                  <ProgressBar value={Number(goalObj.current_amount)} max={goal} color="#ffd93d" height={6} />
+                </div>
+              )}
+
+              {/* Tidslinje-resultat */}
+              {monthlySavings > 0 ? (
+                <>
+                  <div style={{
+                    textAlign: 'center', marginBottom: 14,
+                    background: 'rgba(255,217,61,0.06)', borderRadius: 12, padding: '12px 14px',
+                    border: '1px solid rgba(255,217,61,0.15)',
+                  }}>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+                      Vid nuvarande takt når du målet om
+                    </div>
+                    <div style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 28, fontWeight: 900,
+                      color: '#ffd93d', textShadow: '0 0 20px rgba(255,217,61,0.5)',
+                    }}>
+                      {monthsToGoal <= 12
+                        ? `${monthsToGoal} mån`
+                        : `${(monthsToGoal / 12).toFixed(1)} år`
+                      }
+                    </div>
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                      {(() => {
+                        const targetDate = new Date()
+                        targetDate.setMonth(targetDate.getMonth() + monthsToGoal)
+                        return `🗓️ ~${targetDate.toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' })}`
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Visuell tidslinje */}
+                  <div style={{ position: 'relative', padding: '0 8px', marginBottom: 8 }}>
+                    <div style={{
+                      height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        height: '100%', width: `${Math.min((1 / monthsToGoal) * 100, 100)}%`,
+                        background: 'linear-gradient(90deg, #ffd93d, #f0c020)',
+                        borderRadius: 3, transition: 'width 0.5s ease',
+                        boxShadow: '0 0 8px rgba(255,217,61,0.4)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+                      <div style={{ fontSize: 9, color: '#ffd93d' }}>Nu</div>
+                      <div style={{ fontSize: 9, color: '#64748b' }}>
+                        🎯 {goal.toLocaleString()}{symbol}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Ackumulerat sparande per tidsperiod */}
+                  <div style={{ display: 'flex', gap: 4, marginTop: 10 }}>
+                    {milestones.map(m => {
+                      const accumulated = Number(goalObj.current_amount) + monthlySavings * m.months
+                      const reachedGoal = accumulated >= goal
+                      return (
+                        <div key={m.label} style={{
+                          flex: 1, background: reachedGoal ? 'rgba(255,217,61,0.1)' : '#0b1120',
+                          borderRadius: 8, padding: '8px 4px', textAlign: 'center',
+                          border: `1px solid ${reachedGoal ? 'rgba(255,217,61,0.3)' : '#1e293b'}`,
+                        }}>
+                          <div style={{ fontSize: 8, color: '#475569', marginBottom: 3 }}>{m.label}</div>
+                          <div style={{
+                            fontFamily: 'Orbitron, sans-serif', fontSize: 11, fontWeight: 700,
+                            color: reachedGoal ? '#ffd93d' : '#94a3b8',
+                          }}>
+                            {accumulated >= 1000
+                              ? `${(accumulated / 1000).toFixed(1)}k`
+                              : accumulated.toFixed(0)
+                            }
+                          </div>
+                          <div style={{ fontSize: 7, color: '#334155' }}>{symbol}</div>
+                          {reachedGoal && <div style={{ fontSize: 8, marginTop: 2 }}>🎯</div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Motivationsmeddelande */}
+                  <div style={{
+                    marginTop: 12, padding: '8px 12px', textAlign: 'center',
+                    fontSize: 12, color: '#cbd5e1', lineHeight: 1.4,
+                    background: 'rgba(0,255,135,0.05)', borderRadius: 10,
+                    border: '1px solid rgba(0,255,135,0.1)',
+                  }}>
+                    {monthsToGoal <= 3
+                      ? '🚀 Du är supersnabb! Nästan framme!'
+                      : monthsToGoal <= 6
+                        ? '💪 Starkt tempo! Halvåret är ditt!'
+                        : monthsToGoal <= 12
+                          ? '🎯 Inom ett år — varje månad räknas!'
+                          : monthsToGoal <= 24
+                            ? '🌱 Tålamod lönar sig. Du bygger något stort!'
+                            : '🏔️ Stort mål = stor belöning. Steg för steg!'
+                    }
+                  </div>
+                </>
+              ) : (
+                <div style={{
+                  textAlign: 'center', padding: '12px 0',
+                  fontSize: 12, color: '#ff6b6b', lineHeight: 1.4,
+                }}>
+                  😬 Just nu sparar du ingenting — öka inkomsten eller minska utgifterna för att nå målet!
+                </div>
+              )}
+
+              {/* Ta bort mål */}
+              <button
+                onClick={() => deleteGoal(goalObj.id)}
+                style={{
+                  width: '100%', marginTop: 10, padding: '6px 0',
+                  background: 'transparent', border: '1px solid #1e293b',
+                  borderRadius: 8, color: '#475569', fontSize: 11,
+                  cursor: 'pointer', fontFamily: 'Outfit, sans-serif',
+                }}
+              >
+                Ta bort {goalObj.name}
+              </button>
+            </div>
+          )
+        })}
+
+        {goals.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '4px 0', fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>
+            Sätt ett sparmål för att se hur lång tid det tar att nå dit! 💰
+          </div>
+        )}
+      </div>
     </div>
   )
 }

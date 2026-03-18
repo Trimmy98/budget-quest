@@ -14,14 +14,14 @@ export const LEVELS = [
 ]
 
 export const WEEKLY_CHALLENGES = [
-  { id: 1, title: 'Kaffedetox', description: 'Logga 0 kr på fika 3 dagar i rad', xp: 100 },
-  { id: 2, title: 'Matlagningshjälte', description: 'Håll äta-ute under 20€ hela veckan', xp: 150 },
-  { id: 3, title: 'Streakjägare', description: 'Logga utgifter 7 dagar i rad', xp: 200 },
-  { id: 4, title: 'Budgetmästare', description: 'Håll dig inom budget i alla kategorier', xp: 175 },
-  { id: 5, title: 'Sparexperten', description: 'Spara minst 20% av inkomsten den här veckan', xp: 125 },
-  { id: 6, title: 'Detaljisten', description: 'Logga 10+ utgifter med beskrivning', xp: 100 },
-  { id: 7, title: 'Nolldagen', description: 'Ha en dag utan utgifter', xp: 75 },
-  { id: 8, title: 'Teamspelaren', description: 'Alla i hushållet loggar minst 1 utgift', xp: 150 },
+  { id: 'coffee_detox', title: 'Kaffedetox', description: 'Ha 3 dagar utan fika-utgifter', xp: 100, type: 'zero_category_days', category: 'coffee', target: 3 },
+  { id: 'cooking_hero', title: 'Matlagningshjälte', description: 'Håll äta-ute under 200 kr hela veckan', xp: 150, type: 'category_under', category: 'dining', target: 200 },
+  { id: 'streak_hunter', title: 'Streakjägare', description: 'Logga utgifter varje dag i 7 dagar', xp: 200, type: 'log_days', target: 7 },
+  { id: 'budget_master', title: 'Budgetmästare', description: 'Håll alla kategorier inom budget', xp: 175, type: 'all_under_budget', target: 1 },
+  { id: 'savings_expert', title: 'Sparexperten', description: 'Spara minst 20% av inkomsten', xp: 125, type: 'savings_rate', target: 0.2 },
+  { id: 'detail_king', title: 'Detaljisten', description: 'Logga 10+ utgifter med beskrivning', xp: 100, type: 'expenses_with_desc', target: 10 },
+  { id: 'zero_day', title: 'Nolldagen', description: 'Ha en dag helt utan utgifter', xp: 75, type: 'zero_expense_day', target: 1 },
+  { id: 'team_player', title: 'Teamspelaren', description: 'Alla i hushållet loggar minst 1 utgift', xp: 150, type: 'all_members_log', target: 1 },
 ]
 
 export const ACHIEVEMENTS = [

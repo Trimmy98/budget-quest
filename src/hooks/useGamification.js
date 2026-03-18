@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { ACHIEVEMENTS } from '../lib/constants'
 import { useToast } from '../context/ToastContext'
+import Sentry from '../lib/sentry'
 
 export function useGamification() {
   const { user, profile } = useAuth()
@@ -14,13 +15,14 @@ export function useGamification() {
     if (user && profile?.household_id) {
       fetchGamification()
     }
-  }, [user, profile])
+  }, [user, profile?.household_id])
 
   async function fetchGamification() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('gamification')
       .select('*')
       .eq('household_id', profile.household_id)
+    if (error) { console.error('fetchGamification error:', error); Sentry.captureException(error) }
     if (data) {
       setAllGamification(data)
       const mine = data.find(g => g.user_id === user.id)
@@ -36,57 +38,46 @@ export function useGamification() {
     else if (streak >= 7) bonus = 15
     const totalXP = baseXP + bonus
 
-    const newXP = gamification.xp + totalXP
-    const { data } = await supabase
-      .from('gamification')
-      .update({ xp: newXP })
-      .eq('user_id', user.id)
-      .select()
-      .single()
-
-    if (data) {
-      setGamification(data)
-      addToast(`+${totalXP} XP${bonus > 0 ? ` (🔥 +${bonus} streak bonus)` : ''}`, 'xp', '⚡')
+    const { data: newXP, error } = await supabase.rpc('add_xp', { amount: totalXP })
+    if (error) {
+      console.error('awardXP error:', error); Sentry.captureException(error)
+      return 0
     }
-    return totalXP
+
+    // add_xp returnerar 0 om daglig cap nådd, annars nya totala xp
+    if (newXP === 0 && totalXP > 0) {
+      addToast('Daglig XP-gräns nådd (200/dag)', 'info', '🛡️')
+      return 0
+    }
+
+    setGamification(prev => prev ? { ...prev, xp: newXP } : prev)
+    const awarded = totalXP // kan vara clampat av DB, men toast visar intent
+    addToast(`+${awarded} XP${bonus > 0 ? ` (🔥 +${bonus} streak bonus)` : ''}`, 'xp', '⚡')
+    return awarded
   }
 
   async function updateStreak() {
     if (!gamification) return
-    const today = new Date().toISOString().split('T')[0]
-    const lastLog = gamification.streak_last_log
+    const { data, error } = await supabase.rpc('update_streak')
+    if (error) {
+      console.error('updateStreak error:', error); Sentry.captureException(error)
+      return
+    }
+    if (!data) return
 
-    let newStreak = gamification.streak_current
-    if (!lastLog) {
-      newStreak = 1
-    } else {
-      const lastDate = new Date(lastLog)
-      const todayDate = new Date(today)
-      const diffDays = Math.floor((todayDate - lastDate) / (1000 * 60 * 60 * 24))
-      if (diffDays === 0) return // already logged today
-      if (diffDays === 1) newStreak = (gamification.streak_current || 0) + 1
-      else newStreak = 1 // reset
+    const { streak_days, streak_best, is_new_best } = data
+    setGamification(prev => prev ? {
+      ...prev,
+      streak_current: streak_days,
+      streak_best: streak_best,
+      streak_last_log: new Date().toISOString().split('T')[0],
+    } : prev)
+
+    if (streak_days > (gamification.streak_current || 0)) {
+      addToast(`🔥 ${streak_days} dagars streak!`, 'success', '🔥')
     }
 
-    const newBest = Math.max(newStreak, gamification.streak_best || 0)
-    const { data } = await supabase
-      .from('gamification')
-      .update({
-        streak_current: newStreak,
-        streak_best: newBest,
-        streak_last_log: today,
-      })
-      .eq('user_id', user.id)
-      .select()
-      .single()
-
-    if (data) {
-      setGamification(data)
-      if (newStreak > (gamification.streak_current || 0)) {
-        addToast(`🔥 ${newStreak} dagars streak!`, 'success', '🔥')
-      }
-      await checkStreakAchievements(data)
-    }
+    await checkStreakAchievements({ streak_current: streak_days })
   }
 
   async function checkAndUnlockAchievement(achievementId) {
@@ -108,9 +99,8 @@ export function useGamification() {
     if (data) {
       setGamification(data)
       addToast(`${achievement.icon} Achievement: ${achievement.title}! +${achievement.xp} XP`, 'achievement', achievement.icon)
-      // award the achievement XP
-      await supabase.from('gamification').update({ xp: data.xp + achievement.xp }).eq('user_id', user.id)
-      setGamification(prev => prev ? { ...prev, xp: prev.xp + achievement.xp } : prev)
+      // Atomisk XP-tillägg via RPC — ingen race condition
+      await awardXP(achievement.xp)
     }
   }
 

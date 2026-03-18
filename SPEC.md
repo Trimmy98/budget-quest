@@ -1,0 +1,340 @@
+# Budget Quest — Arkitektur & Specifikation
+
+## Databasschema
+
+### households
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| name | text | NOT NULL | — |
+| invite_code | text | NOT NULL | substring(gen_random_uuid(), 1, 8) |
+| admin_id | uuid | NOT NULL | — |
+| max_members | integer | NOT NULL | 4 |
+| created_at | timestamptz | NULL | now() |
+
+**Index:** PK `id`, UNIQUE `invite_code`
+**FK:** `admin_id → auth.users(id)`
+
+---
+
+### profiles
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | — |
+| household_id | uuid | NULL | — |
+| display_name | text | NOT NULL | — |
+| role | text | NULL | 'member' |
+| onboarding_complete | boolean | NULL | false |
+| created_at | timestamptz | NULL | now() |
+
+**Index:** PK `id`, INDEX `household_id`
+**FK:** `id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id)`
+
+---
+
+### expenses
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| user_id | uuid | NOT NULL | — |
+| date | date | NOT NULL | CURRENT_DATE |
+| amount | numeric | NOT NULL | — |
+| description | text | NOT NULL | '' |
+| category | text | NOT NULL | — |
+| expense_type | text | NOT NULL | — |
+| created_at | timestamptz | NULL | now() |
+| paid_amount | numeric | NOT NULL | 0 |
+
+**Index:** PK `id`, INDEX `(date, household_id)`, INDEX `user_id`
+**FK:** `household_id → households(id)`, `user_id → auth.users(id) ON DELETE CASCADE`
+
+---
+
+### income
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| user_id | uuid | NOT NULL | — |
+| month | text | NOT NULL | — |
+| amount | numeric | NOT NULL | — |
+| description | text | NULL | — |
+
+**Index:** PK `id`, UNIQUE `(household_id, month, user_id)`, INDEX `(user_id, household_id, month)`
+**FK:** `household_id → households(id)`, `user_id → auth.users(id) ON DELETE CASCADE`
+
+---
+
+### budgets
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| shared_categories | jsonb | NOT NULL | '[]' |
+| personal_categories | jsonb | NOT NULL | '[]' |
+| weekly_challenge | jsonb | NULL | — |
+| debt_payments | jsonb | NULL | '[]' |
+| updated_at | timestamptz | NULL | now() |
+
+**Index:** PK `id`, UNIQUE `household_id`
+**FK:** `household_id → households(id)`
+**Trigger:** `update_updated_at` — sätter `updated_at = now()` vid varje UPDATE
+
+---
+
+### gamification
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| user_id | uuid | NOT NULL | — |
+| household_id | uuid | NOT NULL | — |
+| xp | integer | NOT NULL | 0 |
+| streak_current | integer | NOT NULL | 0 |
+| streak_best | integer | NOT NULL | 0 |
+| streak_last_log | date | NULL | — |
+| achievements | jsonb | NULL | '[]' |
+| daily_xp_awarded | integer | NOT NULL | 0 |
+| last_xp_date | date | NULL | — |
+
+**Index:** PK `id`, UNIQUE `user_id`
+**FK:** `user_id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id)`
+
+---
+
+### savings_goals
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| user_id | uuid | NOT NULL | — |
+| household_id | uuid | NOT NULL | — |
+| name | text | NOT NULL | — |
+| target_amount | numeric | NOT NULL | — |
+| current_amount | numeric | NOT NULL | 0 |
+| deadline | date | NULL | — |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Index:** PK `id`, INDEX `(household_id, user_id)`
+**FK:** `user_id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id) ON DELETE CASCADE`
+
+---
+
+### weekly_challenges
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| user_id | uuid | NOT NULL | — |
+| household_id | uuid | NOT NULL | — |
+| week_start | date | NOT NULL | — |
+| challenges | jsonb | NOT NULL | '[]' |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Index:** PK `id`, UNIQUE `(user_id, week_start)`, INDEX `(user_id, week_start)`
+**FK:** `user_id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id) ON DELETE CASCADE`
+
+---
+
+## RPC-funktioner
+
+### add_xp(amount integer) → integer
+
+Atomisk XP-tillägg med daglig cap (200 XP/dag).
+
+- Nollställer `daily_xp_awarded` om `last_xp_date < CURRENT_DATE`
+- Clampar `amount` till kvarvarande cap
+- Returnerar nya totala XP, eller **0** om cap redan nådd
+- Identifierar användaren via `auth.uid()`
+
+### update_streak() → jsonb
+
+Server-side streak-beräkning.
+
+- Om redan loggat idag → returnerar current state utan ändring
+- Om `streak_last_log = igår` → `streak_current + 1`
+- Annars → streak resetas till 1
+- Uppdaterar `streak_best` om nytt rekord
+- Returnerar: `{ streak_days, streak_best, is_new_best }`
+
+### join_household(invite text) → jsonb
+
+Atomisk join med race-condition-skydd.
+
+- Slår upp hushåll via `invite_code`
+- Räknar medlemmar med `FOR UPDATE` (låser raden)
+- Kollar `max_members`
+- Skapar eller uppdaterar profil + gamification-rad
+- Returnerar: `{ id, name, max_members }`
+- Kastar exception vid ogiltigt invite, fullt hushåll, eller ej inloggad
+
+### lookup_household_by_invite(invite_code_param text) → record
+
+Slår upp hushåll utan att joina.
+
+- Returnerar: `(id uuid, name text, max_members integer)`
+- Ersätter den gamla `households_select_by_invite` RLS-policyn
+
+### register_debt_payment(from_user_id uuid, to_user_id uuid, payment_amount numeric) → void
+
+Registrerar en Swish-betalning i pengapusslet.
+
+- Validerar att `from` och `to` tillhör samma hushåll som anroparen
+- Validerar att `payment_amount > 0`
+- Appendar betalningen till `budgets.debt_payments` JSONB-array
+- Kringgår RLS (admin-only) genom att köra som `SECURITY DEFINER` implicit via RPC
+
+### get_my_household_id() → uuid
+
+Hjälpfunktion som returnerar `profiles.household_id` för `auth.uid()`. Används i RLS-policies.
+
+---
+
+## RLS-policies
+
+Alla 8 tabeller har RLS aktiverat.
+
+| Tabell | Policy | Cmd | Villkor |
+|--------|--------|-----|---------|
+| households | households_select | SELECT | id = get_my_household_id() OR admin_id = auth.uid() |
+| households | households_insert | INSERT | admin_id = auth.uid() |
+| households | households_update | UPDATE | admin_id = auth.uid() |
+| profiles | profiles_select | SELECT | id = auth.uid() OR household_id = get_my_household_id() |
+| profiles | profiles_insert | INSERT | id = auth.uid() |
+| profiles | profiles_update | UPDATE | id = auth.uid() |
+| expenses | expenses_select | SELECT | household_id = get_my_household_id() |
+| expenses | expenses_insert | INSERT | household_id = get_my_household_id() AND user_id = auth.uid() |
+| expenses | expenses_update | UPDATE | user_id = auth.uid() OR (expense_type = 'shared' AND household_id = get_my_household_id()) |
+| expenses | expenses_delete | DELETE | user_id = auth.uid() OR (household_id = get_my_household_id() AND role = 'admin') |
+| income | income_select | SELECT | household_id = get_my_household_id() |
+| income | income_insert | INSERT | household_id = get_my_household_id() AND user_id = auth.uid() |
+| income | income_update | UPDATE | household_id = get_my_household_id() AND user_id = auth.uid() |
+| income | income_delete | DELETE | household_id = get_my_household_id() AND user_id = auth.uid() |
+| budgets | budgets_select | SELECT | household_id = get_my_household_id() |
+| budgets | budgets_insert | INSERT | household_id = get_my_household_id() AND role = 'admin' |
+| budgets | budgets_update | UPDATE | household_id = get_my_household_id() AND role = 'admin' |
+| gamification | gamification_select | SELECT | household_id = get_my_household_id() |
+| gamification | gamification_insert | INSERT | user_id = auth.uid() |
+| gamification | gamification_update | UPDATE | user_id = auth.uid() |
+| savings_goals | users_own_goals | ALL | user_id = auth.uid() |
+| weekly_challenges | users_own_challenges | ALL | user_id = auth.uid() |
+
+---
+
+## XP-system
+
+- **+25 XP** per loggad utgift
+- **Streak-bonus:** +15 XP vid 7+ dagar, +25 XP vid 14+ dagar
+- **Daglig cap:** 200 XP/dag (hanteras atomiskt i `add_xp` RPC)
+- **Achievement XP:** varierar per achievement (50–500 XP)
+- **Weekly challenge XP:** 75–200 XP per utmaning
+- **12 levels** (300 XP per level, max level 12 vid 3300 XP)
+
+### Daglig cap-mekanik
+
+`gamification.daily_xp_awarded` trackar dagens tilldelning. `last_xp_date` nollställer countern vid datumbyte. Allt sker atomiskt i PostgreSQL — klienten skickar bara önskat belopp.
+
+---
+
+## Streak-system
+
+Hanteras helt server-side via `update_streak()` RPC.
+
+- Anropas vid varje utgiftsloggning
+- Om `streak_last_log = igår` → current + 1
+- Om `streak_last_log = idag` → ingen ändring (idempotent)
+- Annars → reset till 1
+- `streak_best` uppdateras automatiskt
+
+---
+
+## Weekly Challenges
+
+3 slumpmässiga utmaningar per vecka (mån–sön), lagrade i `weekly_challenges`-tabellen.
+
+**Challenge-typer:**
+- `zero_category_days` — Dagar utan utgifter i en viss kategori
+- `category_under` — Håll en kategori under X kr
+- `log_days` — Logga utgifter X antal dagar
+- `all_under_budget` — Alla kategorier inom budget
+- `savings_rate` — Spara X% av inkomsten
+- `expenses_with_desc` — Logga X utgifter med beskrivning
+- `zero_expense_day` — En dag helt utan utgifter
+- `all_members_log` — Alla i hushållet loggar minst 1 utgift
+
+XP tilldelas via `add_xp` RPC vid completion. Duplikat-skapande hanteras via UNIQUE constraint + conflict recovery.
+
+---
+
+## Savings Goals
+
+Personliga sparmål lagrade i `savings_goals`-tabellen. Migrerar automatiskt från localStorage vid första load.
+
+Stödjer: namn, målbelopp, nuvarande belopp, valfritt deadline.
+
+---
+
+## Gamification: Achievements
+
+12 achievements definierade i `constants.js`:
+
+| ID | Trigger |
+|----|---------|
+| first_step | 1 loggad utgift |
+| on_fire | 3-dagars streak |
+| week_warrior | 7-dagars streak |
+| fortnight_force | 14-dagars streak |
+| monthly_master | 30-dagars streak |
+| data_nerd | 50 utgifter |
+| logging_machine | 100 utgifter |
+| s_rank | Betyg S en månad |
+| a_rank | Betyg A en månad |
+| quest_clear | Nå första sparande-milstolpen |
+| challenger | 5 veckoutmaningar klara |
+| k_club | Spara 1000 totalt |
+
+---
+
+## Månadsbetyg
+
+Baserat på sparkvot (savings rate):
+
+| Betyg | Sparkvot |
+|-------|----------|
+| S | ≥ 30% |
+| A | ≥ 20% |
+| B | ≥ 10% |
+| C | ≥ 0% |
+| D | < 0% |
+
+---
+
+## Tech stack (detaljer)
+
+| Komponent | Paket | Version |
+|-----------|-------|---------|
+| Frontend | React | ^18.2.0 |
+| Bundler | Vite | ^5.0.8 |
+| Backend | @supabase/supabase-js | ^2.39.0 |
+| Routing | react-router-dom | ^6.21.0 |
+| Error tracking | @sentry/react | ^10.43.0 |
+| Testing | vitest | ^4.1.0 |
+| Test utils | @testing-library/react | ^16.3.2 |
+| DOM env | jsdom | ^29.0.0 |
+| Linting | eslint | ^9.39.4 |
+| React hooks lint | eslint-plugin-react-hooks | ^7.0.1 |
+
+### CI/CD Pipeline (GitHub Actions)
+
+Triggas på push till `main`/`master` och PR:er.
+
+1. **Checkout** → Setup Node 20 → Cache `node_modules`
+2. **npm ci** → `npm run lint` → `npm run test:run` → `npm run build`
+
+Build steg använder placeholder Supabase-credentials (validerar bara att bygget fungerar).
