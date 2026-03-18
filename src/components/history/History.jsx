@@ -23,6 +23,8 @@ export default function History({ gamification, selectedMonth }) {
   const [periodExpenses, setPeriodExpenses] = useState([])
   const [periodLoading, setPeriodLoading] = useState(false)
   const [expandedGroup, setExpandedGroup] = useState(null)
+  const [filterCategory, setFilterCategory] = useState(null) // null = alla
+  const [filterPerson, setFilterPerson] = useState(null) // null = alla
 
   const sharedCats = budget?.shared_categories?.length > 0 ? budget.shared_categories : DEFAULT_SHARED_CATEGORIES
   const personalCats = budget?.personal_categories?.length > 0 ? budget.personal_categories : DEFAULT_PERSONAL_CATEGORIES
@@ -241,12 +243,11 @@ export default function History({ gamification, selectedMonth }) {
     if (!profile?.household_id) return
     setPeriodLoading(true)
     try {
-      let { start, end } = getPeriodRange(periodMode, periodOffset)
-      // For month mode, fetch 3 months (prev, current, next) for navigation smoothness
-      if (periodMode === 'month') {
-        const prev = getPeriodRange('month', periodOffset - 2)
-        start = prev.start
-      }
+      // Always fetch current + previous period for comparison
+      const prevRange = getPeriodRange(periodMode, periodOffset - 1)
+      const currRange = getPeriodRange(periodMode, periodOffset)
+      const start = prevRange.start < currRange.start ? prevRange.start : currRange.start
+      const end = currRange.end
       const { data, error } = await supabase
         .from('expenses')
         .select('*')
@@ -261,16 +262,12 @@ export default function History({ gamification, selectedMonth }) {
     }
   }
 
-  function groupExpenses(expenses, mode) {
-    const { start, end } = getPeriodRange(mode, periodOffset)
-    const filtered = expenses.filter(e => e.date >= start && e.date <= end)
-
+  function groupExpenses(filtered, mode) {
     if (mode === 'day') {
-      // Single group
+      const { start } = getPeriodRange(mode, periodOffset)
       return [{ key: start, label: formatPeriodLabel(mode, periodOffset), expenses: filtered }]
     }
     if (mode === 'week') {
-      // Group by day within the week
       const groups = {}
       const mNames = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december']
       filtered.forEach(e => {
@@ -287,7 +284,7 @@ export default function History({ gamification, selectedMonth }) {
     const groups = {}
     filtered.forEach(e => {
       const d = new Date(e.date + 'T00:00:00')
-      const dayOfWeek = d.getDay() === 0 ? 6 : d.getDay() - 1 // monday = 0
+      const dayOfWeek = d.getDay() === 0 ? 6 : d.getDay() - 1
       const monday = new Date(d)
       monday.setDate(d.getDate() - dayOfWeek)
       const key = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`
@@ -384,14 +381,24 @@ export default function History({ gamification, selectedMonth }) {
 
       {/* ═══ PERIOD-ÖVERSIKT (Utgifter-tab) ═══ */}
       {tab === 'expenses' && (() => {
-        const groups = groupExpenses(periodExpenses, periodMode)
         const { start, end } = getPeriodRange(periodMode, periodOffset)
-        const allFiltered = periodExpenses.filter(e => e.date >= start && e.date <= end)
+        const prevRange = getPeriodRange(periodMode, periodOffset - 1)
+
+        // Apply filters to a set of expenses
+        const applyFilters = (exps) => exps.filter(e =>
+          (!filterCategory || e.category === filterCategory) &&
+          (!filterPerson || e.user_id === filterPerson)
+        )
+
+        const allInPeriod = periodExpenses.filter(e => e.date >= start && e.date <= end)
+        const allFiltered = applyFilters(allInPeriod)
+        const prevInPeriod = periodExpenses.filter(e => e.date >= prevRange.start && e.date <= prevRange.end)
+        const prevFiltered = applyFilters(prevInPeriod)
+
         const periodTotal = allFiltered.reduce((s, e) => s + Number(e.amount), 0)
-        const sharedInPeriod = allFiltered.filter(e => e.expense_type === 'shared')
-        const personalInPeriod = allFiltered.filter(e => e.expense_type === 'personal')
-        const sharedTotal = sharedInPeriod.reduce((s, e) => s + Number(e.amount), 0)
-        const personalTotal = personalInPeriod.reduce((s, e) => s + Number(e.amount), 0)
+        const prevTotal = prevFiltered.reduce((s, e) => s + Number(e.amount), 0)
+        const sharedTotal = allFiltered.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0)
+        const personalTotal = allFiltered.filter(e => e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
         const memCount = members.length || 1
 
         // Per-member totals for proportional bar
@@ -407,12 +414,37 @@ export default function History({ gamification, selectedMonth }) {
         })
         const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 3)
 
+        // Comparison: category that changed most
+        const prevCatTotals = {}
+        prevFiltered.forEach(e => {
+          prevCatTotals[e.category] = (prevCatTotals[e.category] || 0) + Number(e.amount)
+        })
+        const allCatIds = new Set([...Object.keys(catTotals), ...Object.keys(prevCatTotals)])
+        let biggestIncrease = null
+        let biggestDecrease = null
+        allCatIds.forEach(catId => {
+          const curr = catTotals[catId] || 0
+          const prev = prevCatTotals[catId] || 0
+          const diff = curr - prev
+          if (!biggestIncrease || diff > biggestIncrease.diff) biggestIncrease = { catId, diff }
+          if (!biggestDecrease || diff < biggestDecrease.diff) biggestDecrease = { catId, diff }
+        })
+
+        // Available filter options (from all unfiltered expenses in period)
+        const availableCategories = [...new Set(allInPeriod.map(e => e.category))].sort()
+        const availablePersons = [...new Set(allInPeriod.map(e => e.user_id))]
+
+        // Grouping uses filtered data
+        const groups = groupExpenses(allFiltered.length > 0 ? allFiltered : [], periodMode)
+
+        const periodLabel = periodMode === 'month' ? 'månaden' : periodMode === 'week' ? 'veckan' : 'dagen'
+
         return (
           <>
             {/* Dag/Vecka/Månad toggle */}
             <div style={{
               display: 'flex', background: '#0b1120', borderRadius: 10, padding: 3,
-              marginBottom: 12, border: '1px solid #1e293b',
+              marginBottom: 10, border: '1px solid #1e293b',
             }}>
               {[
                 { id: 'day', label: 'Dag' },
@@ -428,6 +460,61 @@ export default function History({ gamification, selectedMonth }) {
                   {m.label}
                 </button>
               ))}
+            </div>
+
+            {/* Filter */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+              {/* Kategori-filter */}
+              <select
+                value={filterCategory || ''}
+                onChange={e => setFilterCategory(e.target.value || null)}
+                style={{
+                  background: '#0b1120', border: '1px solid #1e293b', borderRadius: 8,
+                  padding: '6px 10px', color: filterCategory ? '#00f0ff' : '#64748b',
+                  fontSize: 12, fontFamily: 'Outfit, sans-serif', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                <option value="">Alla kategorier</option>
+                {availableCategories.map(catId => {
+                  const cat = getCatInfo(catId)
+                  return <option key={catId} value={catId}>{cat.icon} {cat.name}</option>
+                })}
+              </select>
+              {/* Person-filter */}
+              <select
+                value={filterPerson || ''}
+                onChange={e => setFilterPerson(e.target.value || null)}
+                style={{
+                  background: '#0b1120', border: '1px solid #1e293b', borderRadius: 8,
+                  padding: '6px 10px', color: filterPerson ? '#00f0ff' : '#64748b',
+                  fontSize: 12, fontFamily: 'Outfit, sans-serif', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                <option value="">Alla personer</option>
+                {availablePersons.map(uid => {
+                  const member = members.find(m => m.id === uid)
+                  return <option key={uid} value={uid}>{uid === user?.id ? 'Du' : member?.display_name || 'Okänd'}</option>
+                })}
+              </select>
+              {/* Aktiva filter-pills */}
+              {filterCategory && (
+                <button onClick={() => setFilterCategory(null)} style={{
+                  background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.3)',
+                  borderRadius: 8, padding: '4px 10px', color: '#00f0ff', fontSize: 11,
+                  fontFamily: 'Outfit, sans-serif', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                }}>
+                  {getCatInfo(filterCategory).icon} {getCatInfo(filterCategory).name} ✕
+                </button>
+              )}
+              {filterPerson && (
+                <button onClick={() => setFilterPerson(null)} style={{
+                  background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.3)',
+                  borderRadius: 8, padding: '4px 10px', color: '#00f0ff', fontSize: 11,
+                  fontFamily: 'Outfit, sans-serif', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                }}>
+                  {filterPerson === user?.id ? 'Du' : members.find(m => m.id === filterPerson)?.display_name || 'Okänd'} ✕
+                </button>
+              )}
             </div>
 
             {/* Navigation */}
@@ -462,7 +549,7 @@ export default function History({ gamification, selectedMonth }) {
               <div style={{
                 ...cardStyle, textAlign: 'center', padding: '30px 16px', color: '#475569',
               }}>
-                Inga utgifter denna period
+                {allInPeriod.length > 0 ? 'Inga utgifter matchar filtret' : 'Inga utgifter denna period'}
               </div>
             ) : (
               <>
@@ -472,7 +559,7 @@ export default function History({ gamification, selectedMonth }) {
                   border: '1px solid #1e293b', borderRadius: 20, padding: 16, marginBottom: 14,
                 }}>
                   {/* Total */}
-                  <div style={{ marginBottom: 12 }}>
+                  <div style={{ marginBottom: 4 }}>
                     <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Totalt</div>
                     <div style={{
                       fontFamily: 'Orbitron, sans-serif', fontSize: 28, fontWeight: 900,
@@ -480,6 +567,42 @@ export default function History({ gamification, selectedMonth }) {
                     }}>
                       {periodTotal.toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
                     </div>
+                  </div>
+
+                  {/* Jämförelse med förra perioden */}
+                  <div style={{ marginBottom: 12 }}>
+                    {prevFiltered.length === 0 ? (
+                      <div style={{ fontSize: 11, color: '#475569' }}>Ingen data för förra {periodLabel}</div>
+                    ) : (() => {
+                      const diff = periodTotal - prevTotal
+                      const pctChange = prevTotal > 0 ? ((diff / prevTotal) * 100) : 0
+                      const isMore = diff > 0
+                      return (
+                        <div>
+                          <div style={{ fontSize: 12, color: isMore ? '#ff6b6b' : '#00ff87', fontWeight: 600 }}>
+                            {isMore ? '↑' : '↓'} {Math.abs(pctChange).toFixed(0)}% {isMore ? 'mer' : 'mindre'} än förra {periodLabel}
+                            <span style={{ color: '#64748b', fontWeight: 400, marginLeft: 6 }}>
+                              ({isMore ? '+' : ''}{diff.toFixed(0)}{symbol})
+                            </span>
+                          </div>
+                          {/* Största ökning/minskning per kategori */}
+                          {(biggestIncrease?.diff > 0 || biggestDecrease?.diff < 0) && (
+                            <div style={{ fontSize: 10, color: '#64748b', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              {biggestIncrease && biggestIncrease.diff > 0 && (
+                                <span>
+                                  <span style={{ color: '#ff6b6b' }}>{getCatInfo(biggestIncrease.catId).icon} {getCatInfo(biggestIncrease.catId).name} +{biggestIncrease.diff.toFixed(0)}{symbol}</span>
+                                </span>
+                              )}
+                              {biggestDecrease && biggestDecrease.diff < 0 && biggestDecrease.catId !== biggestIncrease?.catId && (
+                                <span>
+                                  <span style={{ color: '#00ff87' }}>{getCatInfo(biggestDecrease.catId).icon} {getCatInfo(biggestDecrease.catId).name} {biggestDecrease.diff.toFixed(0)}{symbol}</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   {/* Proportionell bar: vem lade ut vad */}
