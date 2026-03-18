@@ -48,7 +48,10 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  async function fetchProfile(userId) {
+  async function fetchProfile(userId, attempt = 1) {
+    const MAX_RETRIES = 3
+    const isRetry = attempt > 1
+
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -56,12 +59,27 @@ export function AuthProvider({ children }) {
         .eq('id', userId)
         .single()
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('fetchProfile error:', error); Sentry.captureException(error)
+      // PGRST116 = "no rows" — genuint ny användare, ingen retry
+      if (error && error.code === 'PGRST116') {
+        setProfile(null)
+        setHousehold(null)
+        setLoading(false)
+        return
+      }
+
+      // Nätverksfel / AbortError / timeout — retry med backoff
+      if (error) {
+        console.error(`fetchProfile error (${attempt}/${MAX_RETRIES}):`, error)
+        if (attempt < MAX_RETRIES) {
+          setTimeout(() => fetchProfile(userId, attempt + 1), attempt * 1000)
+          return
+        }
+        Sentry.captureException(error)
+        setLoading(false)
+        return
       }
 
       if (!data) {
-        // No profile yet – could be new user or deleted user
         setProfile(null)
         setHousehold(null)
         setLoading(false)
@@ -71,18 +89,30 @@ export function AuthProvider({ children }) {
       setProfile(data)
 
       if (data.household_id) {
-        const { data: hh } = await supabase
+        const { data: hh, error: hhError } = await supabase
           .from('households')
           .select('*')
           .eq('id', data.household_id)
           .single()
+
+        if (hhError && attempt < MAX_RETRIES) {
+          console.error(`fetchHousehold error (${attempt}/${MAX_RETRIES}):`, hhError)
+          setTimeout(() => fetchProfile(userId, attempt + 1), attempt * 1000)
+          return
+        }
         setHousehold(hh ?? null)
       } else {
         setHousehold(null)
       }
+
+      setLoading(false)
     } catch (err) {
-      console.error('fetchProfile exception:', err); Sentry.captureException(err)
-    } finally {
+      console.error(`fetchProfile exception (${attempt}/${MAX_RETRIES}):`, err)
+      if (attempt < MAX_RETRIES) {
+        setTimeout(() => fetchProfile(userId, attempt + 1), attempt * 1000)
+        return
+      }
+      Sentry.captureException(err)
       setLoading(false)
     }
   }

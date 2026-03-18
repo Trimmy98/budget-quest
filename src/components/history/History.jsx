@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useBudget } from '../../hooks/useExpenses'
+import { useBudgetStatus } from '../../hooks/useBudgetStatus'
 import { useCurrency } from '../../hooks/useCurrency'
 import Sentry from '../../lib/sentry'
 import { ACHIEVEMENTS, getMonthGrade, getCurrentMonth, DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
@@ -10,12 +11,16 @@ import ProgressBar from '../shared/ProgressBar'
 export default function History({ gamification, selectedMonth }) {
   const { user, profile } = useAuth()
   const { budget } = useBudget()
+  const { budgetStatus } = useBudgetStatus(selectedMonth)
   const { symbol } = useCurrency()
   const [tab, setTab] = useState('expenses')
   const [monthData, setMonthData] = useState([])
   const [loading, setLoading] = useState(true)
   const [members, setMembers] = useState([])
   const [expandedMonth, setExpandedMonth] = useState(null)
+
+  // Perspektiv-toggle: hushåll vs mitt
+  const [viewMode, setViewMode] = useState('household') // 'household' | 'mine'
 
   // Period-översikt state
   const [periodMode, setPeriodMode] = useState('month') // 'day' | 'week' | 'month'
@@ -383,6 +388,8 @@ export default function History({ gamification, selectedMonth }) {
       {tab === 'expenses' && (() => {
         const { start, end } = getPeriodRange(periodMode, periodOffset)
         const prevRange = getPeriodRange(periodMode, periodOffset - 1)
+        const memCount = members.length || 1
+        const isMine = viewMode === 'mine'
 
         // Apply filters to a set of expenses
         const applyFilters = (exps) => exps.filter(e =>
@@ -395,13 +402,36 @@ export default function History({ gamification, selectedMonth }) {
         const prevInPeriod = periodExpenses.filter(e => e.date >= prevRange.start && e.date <= prevRange.end)
         const prevFiltered = applyFilters(prevInPeriod)
 
-        const periodTotal = allFiltered.reduce((s, e) => s + Number(e.amount), 0)
-        const prevTotal = prevFiltered.reduce((s, e) => s + Number(e.amount), 0)
-        const sharedTotal = allFiltered.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0)
-        const personalTotal = allFiltered.filter(e => e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
-        const memCount = members.length || 1
+        // === Hushåll-vy: alla belopp rakt av ===
+        // === Mitt-vy: gemensamt/memberCount + mina personliga ===
+        const getMyCost = (e) => {
+          if (e.expense_type === 'shared') return Number(e.amount) / memCount
+          if (e.user_id === user?.id) return Number(e.amount)
+          return 0 // annan persons personliga utgift syns inte i "mitt"
+        }
 
-        // Per-member totals for proportional bar
+        // I "mitt"-läge: filtrera bort andras personliga
+        const myFiltered = isMine
+          ? allFiltered.filter(e => e.expense_type === 'shared' || e.user_id === user?.id)
+          : allFiltered
+        const myPrevFiltered = isMine
+          ? prevFiltered.filter(e => e.expense_type === 'shared' || e.user_id === user?.id)
+          : prevFiltered
+
+        const periodTotal = isMine
+          ? myFiltered.reduce((s, e) => s + getMyCost(e), 0)
+          : allFiltered.reduce((s, e) => s + Number(e.amount), 0)
+        const prevTotal = isMine
+          ? myPrevFiltered.reduce((s, e) => s + getMyCost(e), 0)
+          : prevFiltered.reduce((s, e) => s + Number(e.amount), 0)
+
+        const sharedTotal = allFiltered.filter(e => e.expense_type === 'shared').reduce((s, e) => s + Number(e.amount), 0)
+        const personalTotal = isMine
+          ? allFiltered.filter(e => e.expense_type === 'personal' && e.user_id === user?.id).reduce((s, e) => s + Number(e.amount), 0)
+          : allFiltered.filter(e => e.expense_type === 'personal').reduce((s, e) => s + Number(e.amount), 0)
+        const mySharedPart = sharedTotal / memCount
+
+        // Per-member totals for proportional bar (hushåll-vy)
         const memberTotals = {}
         allFiltered.forEach(e => {
           memberTotals[e.user_id] = (memberTotals[e.user_id] || 0) + Number(e.amount)
@@ -409,15 +439,19 @@ export default function History({ gamification, selectedMonth }) {
 
         // Top 3 categories
         const catTotals = {}
-        allFiltered.forEach(e => {
-          catTotals[e.category] = (catTotals[e.category] || 0) + Number(e.amount)
+        const effectiveList = isMine ? myFiltered : allFiltered
+        effectiveList.forEach(e => {
+          const cost = isMine ? getMyCost(e) : Number(e.amount)
+          catTotals[e.category] = (catTotals[e.category] || 0) + cost
         })
         const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 3)
 
         // Comparison: category that changed most
         const prevCatTotals = {}
-        prevFiltered.forEach(e => {
-          prevCatTotals[e.category] = (prevCatTotals[e.category] || 0) + Number(e.amount)
+        const prevEffective = isMine ? myPrevFiltered : prevFiltered
+        prevEffective.forEach(e => {
+          const cost = isMine ? getMyCost(e) : Number(e.amount)
+          prevCatTotals[e.category] = (prevCatTotals[e.category] || 0) + cost
         })
         const allCatIds = new Set([...Object.keys(catTotals), ...Object.keys(prevCatTotals)])
         let biggestIncrease = null
@@ -434,13 +468,44 @@ export default function History({ gamification, selectedMonth }) {
         const availableCategories = [...new Set(allInPeriod.map(e => e.category))].sort()
         const availablePersons = [...new Set(allInPeriod.map(e => e.user_id))]
 
-        // Grouping uses filtered data
-        const groups = groupExpenses(allFiltered.length > 0 ? allFiltered : [], periodMode)
+        // Grouping
+        const groupSource = isMine ? myFiltered : allFiltered
+        const groups = groupExpenses(groupSource.length > 0 ? groupSource : [], periodMode)
 
         const periodLabel = periodMode === 'month' ? 'månaden' : periodMode === 'week' ? 'veckan' : 'dagen'
+        const noData = isMine ? myFiltered.length === 0 : allFiltered.length === 0
 
         return (
           <>
+            {/* Hushåll / Mitt toggle */}
+            <div style={{
+              display: 'flex', background: '#0b1120', borderRadius: 12, padding: 3,
+              marginBottom: 10, border: '1px solid #1e293b',
+            }}>
+              {[
+                { id: 'household', label: 'Hushåll' },
+                { id: 'mine', label: 'Mitt' },
+              ].map(v => (
+                <button key={v.id} onClick={() => setViewMode(v.id)} style={{
+                  flex: 1, padding: '9px 0', border: 'none', borderRadius: 9, cursor: 'pointer',
+                  fontFamily: 'Outfit, sans-serif', fontWeight: 700, fontSize: 14, transition: 'all 0.2s',
+                  background: viewMode === v.id
+                    ? v.id === 'household'
+                      ? 'linear-gradient(135deg, rgba(255,121,198,0.2), rgba(255,121,198,0.08))'
+                      : 'linear-gradient(135deg, rgba(0,240,255,0.2), rgba(0,240,255,0.08))'
+                    : 'transparent',
+                  color: viewMode === v.id
+                    ? v.id === 'household' ? '#ff79c6' : '#00f0ff'
+                    : '#64748b',
+                  boxShadow: viewMode === v.id
+                    ? v.id === 'household' ? '0 0 8px rgba(255,121,198,0.15)' : '0 0 8px rgba(0,240,255,0.15)'
+                    : 'none',
+                }}>
+                  {v.id === 'household' ? '🏠 ' : '👤 '}{v.label}
+                </button>
+              ))}
+            </div>
+
             {/* Dag/Vecka/Månad toggle */}
             <div style={{
               display: 'flex', background: '#0b1120', borderRadius: 10, padding: 3,
@@ -464,7 +529,6 @@ export default function History({ gamification, selectedMonth }) {
 
             {/* Filter */}
             <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-              {/* Kategori-filter */}
               <select
                 value={filterCategory || ''}
                 onChange={e => setFilterCategory(e.target.value || null)}
@@ -480,7 +544,6 @@ export default function History({ gamification, selectedMonth }) {
                   return <option key={catId} value={catId}>{cat.icon} {cat.name}</option>
                 })}
               </select>
-              {/* Person-filter */}
               <select
                 value={filterPerson || ''}
                 onChange={e => setFilterPerson(e.target.value || null)}
@@ -490,13 +553,12 @@ export default function History({ gamification, selectedMonth }) {
                   fontSize: 12, fontFamily: 'Outfit, sans-serif', cursor: 'pointer', outline: 'none',
                 }}
               >
-                <option value="">Alla personer</option>
+                <option value="">{isMine ? 'Alla (vem la ut)' : 'Alla personer'}</option>
                 {availablePersons.map(uid => {
                   const member = members.find(m => m.id === uid)
                   return <option key={uid} value={uid}>{uid === user?.id ? 'Du' : member?.display_name || 'Okänd'}</option>
                 })}
               </select>
-              {/* Aktiva filter-pills */}
               {filterCategory && (
                 <button onClick={() => setFilterCategory(null)} style={{
                   background: 'rgba(0,240,255,0.1)', border: '1px solid rgba(0,240,255,0.3)',
@@ -545,7 +607,7 @@ export default function History({ gamification, selectedMonth }) {
 
             {periodLoading ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>Laddar...</div>
-            ) : allFiltered.length === 0 ? (
+            ) : noData ? (
               <div style={{
                 ...cardStyle, textAlign: 'center', padding: '30px 16px', color: '#475569',
               }}>
@@ -560,7 +622,9 @@ export default function History({ gamification, selectedMonth }) {
                 }}>
                   {/* Total */}
                   <div style={{ marginBottom: 4 }}>
-                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Totalt</div>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>
+                      {isMine ? 'Din totalkostnad' : 'Totalt'}
+                    </div>
                     <div style={{
                       fontFamily: 'Orbitron, sans-serif', fontSize: 28, fontWeight: 900,
                       color: '#e2e8f0',
@@ -571,7 +635,7 @@ export default function History({ gamification, selectedMonth }) {
 
                   {/* Jämförelse med förra perioden */}
                   <div style={{ marginBottom: 12 }}>
-                    {prevFiltered.length === 0 ? (
+                    {(isMine ? myPrevFiltered : prevFiltered).length === 0 ? (
                       <div style={{ fontSize: 11, color: '#475569' }}>Ingen data för förra {periodLabel}</div>
                     ) : (() => {
                       const diff = periodTotal - prevTotal
@@ -585,18 +649,13 @@ export default function History({ gamification, selectedMonth }) {
                               ({isMore ? '+' : ''}{diff.toFixed(0)}{symbol})
                             </span>
                           </div>
-                          {/* Största ökning/minskning per kategori */}
                           {(biggestIncrease?.diff > 0 || biggestDecrease?.diff < 0) && (
                             <div style={{ fontSize: 10, color: '#64748b', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                               {biggestIncrease && biggestIncrease.diff > 0 && (
-                                <span>
-                                  <span style={{ color: '#ff6b6b' }}>{getCatInfo(biggestIncrease.catId).icon} {getCatInfo(biggestIncrease.catId).name} +{biggestIncrease.diff.toFixed(0)}{symbol}</span>
-                                </span>
+                                <span style={{ color: '#ff6b6b' }}>{getCatInfo(biggestIncrease.catId).icon} {getCatInfo(biggestIncrease.catId).name} +{biggestIncrease.diff.toFixed(0)}{symbol}</span>
                               )}
                               {biggestDecrease && biggestDecrease.diff < 0 && biggestDecrease.catId !== biggestIncrease?.catId && (
-                                <span>
-                                  <span style={{ color: '#00ff87' }}>{getCatInfo(biggestDecrease.catId).icon} {getCatInfo(biggestDecrease.catId).name} {biggestDecrease.diff.toFixed(0)}{symbol}</span>
-                                </span>
+                                <span style={{ color: '#00ff87' }}>{getCatInfo(biggestDecrease.catId).icon} {getCatInfo(biggestDecrease.catId).name} {biggestDecrease.diff.toFixed(0)}{symbol}</span>
                               )}
                             </div>
                           )}
@@ -605,8 +664,8 @@ export default function History({ gamification, selectedMonth }) {
                     })()}
                   </div>
 
-                  {/* Proportionell bar: vem lade ut vad */}
-                  {memCount > 1 && periodTotal > 0 && (
+                  {/* === HUSHÅLL: Proportionell bar vem lade ut vad === */}
+                  {!isMine && memCount > 1 && periodTotal > 0 && (
                     <div style={{ marginBottom: 12 }}>
                       <div style={{ borderRadius: 8, overflow: 'hidden', height: 24, display: 'flex', background: '#0b1120' }}>
                         {Object.entries(memberTotals).map(([uid, total]) => {
@@ -644,53 +703,157 @@ export default function History({ gamification, selectedMonth }) {
                     </div>
                   )}
 
-                  {/* Gemensamt vs personligt */}
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                    <div style={{
-                      flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
-                      border: '1px solid #1e293b', textAlign: 'center',
-                    }}>
-                      <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Gemensamt</div>
-                      <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#ff79c6' }}>
-                        {sharedTotal.toFixed(0)}{symbol}
+                  {/* === MITT: Tre summerings-boxar === */}
+                  {isMine && (
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                      <div style={{
+                        flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 6px',
+                        border: '1px solid #1e293b', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 8, color: '#64748b', marginBottom: 2 }}>Din del av gemensamt</div>
+                        <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 13, fontWeight: 700, color: '#ff79c6' }}>
+                          {mySharedPart.toFixed(0)}{symbol}
+                        </div>
                       </div>
-                    </div>
-                    <div style={{
-                      flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
-                      border: '1px solid #1e293b', textAlign: 'center',
-                    }}>
-                      <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Personligt</div>
-                      <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#a78bfa' }}>
-                        {personalTotal.toFixed(0)}{symbol}
+                      <div style={{
+                        flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 6px',
+                        border: '1px solid #1e293b', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 8, color: '#64748b', marginBottom: 2 }}>Personligt</div>
+                        <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>
+                          {personalTotal.toFixed(0)}{symbol}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Topp 3 kategorier */}
-                  {topCats.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>Topp kategorier</div>
-                      {topCats.map(([catId, total]) => {
-                        const cat = getCatInfo(catId)
-                        return (
-                          <div key={catId} style={{
-                            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
-                          }}>
-                            <span style={{ fontSize: 14 }}>{cat.icon}</span>
-                            <span style={{ fontSize: 12, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
-                            <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
-                              {total.toFixed(0)}{symbol}
-                            </span>
-                          </div>
-                        )
-                      })}
+                      <div style={{
+                        flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 6px',
+                        border: '1px solid rgba(0,240,255,0.2)', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 8, color: '#64748b', marginBottom: 2 }}>Totalt</div>
+                        <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 13, fontWeight: 700, color: '#00f0ff' }}>
+                          {periodTotal.toFixed(0)}{symbol}
+                        </div>
+                      </div>
                     </div>
                   )}
+
+                  {/* === MITT: Proportionell bar gemensam del vs personligt === */}
+                  {isMine && periodTotal > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ borderRadius: 8, overflow: 'hidden', height: 24, display: 'flex', background: '#0b1120' }}>
+                        {mySharedPart > 0 && (
+                          <div style={{
+                            width: `${(mySharedPart / periodTotal) * 100}%`, height: '100%',
+                            background: 'linear-gradient(135deg, #ff79c6, #ff5599)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 10, fontWeight: 700, color: '#020617',
+                            overflow: 'hidden', whiteSpace: 'nowrap',
+                            transition: 'width 0.3s ease',
+                          }}>
+                            {(mySharedPart / periodTotal) * 100 > 20 && `Gemensamt ${mySharedPart.toFixed(0)}${symbol}`}
+                          </div>
+                        )}
+                        {personalTotal > 0 && (
+                          <div style={{
+                            width: `${(personalTotal / periodTotal) * 100}%`, height: '100%',
+                            background: 'linear-gradient(135deg, #a78bfa, #8b5cf6)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 10, fontWeight: 700, color: '#020617',
+                            overflow: 'hidden', whiteSpace: 'nowrap',
+                            transition: 'width 0.3s ease',
+                          }}>
+                            {(personalTotal / periodTotal) * 100 > 20 && `Personligt ${personalTotal.toFixed(0)}${symbol}`}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 2, background: '#ff79c6' }} />
+                          <span style={{ fontSize: 10, color: '#94a3b8' }}>Gemensamt: {mySharedPart.toFixed(0)}{symbol}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 2, background: '#a78bfa' }} />
+                          <span style={{ fontSize: 10, color: '#94a3b8' }}>Personligt: {personalTotal.toFixed(0)}{symbol}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* === HUSHÅLL: Gemensamt vs personligt === */}
+                  {!isMine && (
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                      <div style={{
+                        flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                        border: '1px solid #1e293b', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Gemensamt</div>
+                        <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#ff79c6' }}>
+                          {sharedTotal.toFixed(0)}{symbol}
+                        </div>
+                      </div>
+                      <div style={{
+                        flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                        border: '1px solid #1e293b', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 9, color: '#64748b', marginBottom: 2 }}>Personligt</div>
+                        <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#a78bfa' }}>
+                          {personalTotal.toFixed(0)}{symbol}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Topp kategorier med budget-bars */}
+                  {topCats.length > 0 && (() => {
+                    const bCats = budgetStatus?.categories || []
+                    return (
+                      <div>
+                        <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>Topp kategorier</div>
+                        {topCats.map(([catId, total]) => {
+                          const cat = getCatInfo(catId)
+                          const bc = bCats.find(c => c.category === catId)
+                          const budgetAmt = bc ? Number(bc.budget_amount) : 0
+                          const spentForBar = isMine && bc ? Number(bc.my_spent) : total
+                          const budgetForBar = isMine && memCount > 1 ? budgetAmt / memCount : budgetAmt
+                          const pct = budgetForBar > 0 ? (spentForBar / budgetForBar) * 100 : 0
+                          const barColor = pct > 90 ? '#ff6b6b' : pct > 75 ? '#ff9f43' : pct > 50 ? '#ffd93d' : '#00ff87'
+
+                          return (
+                            <div key={catId} style={{ marginBottom: 8 }}>
+                              <div style={{
+                                display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3,
+                              }}>
+                                <span style={{ fontSize: 14 }}>{cat.icon}</span>
+                                <span style={{ fontSize: 12, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
+                                <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
+                                  {total.toFixed(0)}{symbol}
+                                </span>
+                                {budgetForBar > 0 && (
+                                  <span style={{ fontSize: 10, color: '#64748b' }}>
+                                    / {budgetForBar.toFixed(0)}{symbol}
+                                  </span>
+                                )}
+                              </div>
+                              {budgetForBar > 0 && (
+                                <div style={{ borderRadius: 3, overflow: 'hidden', height: 4, background: '#0b1120', marginLeft: 22 }}>
+                                  <div style={{
+                                    width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 3,
+                                    background: barColor, transition: 'width 0.4s ease',
+                                  }} />
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* Grupperade utgifter */}
                 {groups.map(group => {
-                  const groupTotal = group.expenses.reduce((s, e) => s + Number(e.amount), 0)
+                  const groupTotal = isMine
+                    ? group.expenses.reduce((s, e) => s + getMyCost(e), 0)
+                    : group.expenses.reduce((s, e) => s + Number(e.amount), 0)
                   const isMonth = periodMode === 'month'
                   const isExpanded = !isMonth || expandedGroup === group.key
                   const visibleExpenses = isExpanded ? group.expenses : []
@@ -730,6 +893,7 @@ export default function History({ gamification, selectedMonth }) {
                           {visibleExpenses.map(e => {
                             const member = members.find(m => m.id === e.user_id)
                             const isShared = e.expense_type === 'shared'
+                            const displayAmount = isMine ? getMyCost(e) : Number(e.amount)
                             return (
                               <div key={e.id} style={{
                                 display: 'flex', alignItems: 'center', gap: 8,
@@ -743,13 +907,16 @@ export default function History({ gamification, selectedMonth }) {
                                     {e.description || '(ingen beskrivning)'}
                                   </div>
                                   <div style={{ fontSize: 10, color: '#475569' }}>
-                                    {e.user_id === user?.id ? 'Du' : member?.display_name || 'Okänd'}
+                                    {isMine && isShared
+                                      ? <>{e.user_id === user?.id ? 'Du' : member?.display_name || 'Okänd'} la ut {Number(e.amount).toFixed(0)}{symbol}</>
+                                      : <>{e.user_id === user?.id ? 'Du' : member?.display_name || 'Okänd'}</>
+                                    }
                                     <span style={{
                                       marginLeft: 6, fontSize: 9, padding: '1px 5px', borderRadius: 4,
                                       background: isShared ? 'rgba(255,121,198,0.12)' : 'rgba(167,139,250,0.12)',
                                       color: isShared ? '#ff79c6' : '#a78bfa',
                                     }}>
-                                      {isShared ? 'gemensam' : 'personlig'}
+                                      {isMine && isShared ? 'din del' : isShared ? 'gemensam' : 'personlig'}
                                     </span>
                                   </div>
                                 </div>
@@ -757,7 +924,7 @@ export default function History({ gamification, selectedMonth }) {
                                   fontFamily: 'Orbitron, sans-serif', fontSize: 12, fontWeight: 700,
                                   color: '#e2e8f0', flexShrink: 0,
                                 }}>
-                                  {Number(e.amount).toFixed(0)}{symbol}
+                                  {displayAmount.toFixed(0)}{symbol}
                                 </div>
                               </div>
                             )

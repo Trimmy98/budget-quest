@@ -71,18 +71,41 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 
 ## Funktioner
 
-- **Auth**: Registrering + inloggning via Supabase Auth
-- **Hushåll**: Skapa/gå med i hushåll med inbjudningslänkar (race-safe via RPC)
-- **Utgifter**: Logga gemensamma och personliga utgifter med split-lägen
-- **Pengapusslet**: Server-side skuldsaldoberäkning (`calculate_debt` RPC), betalningshistorik med edit/delete, inline betalningsformulär
-- **Dashboard**: Level, streak, leaderboard, månadsbetyg
+### Utgifter & Budget
+- **Utgifter**: Logga gemensamma och personliga utgifter med split-lägen ("Jag betalade allt" / "Redan min del")
+- **Månadsbudget**: Sätt budget per kategori med live burn rate. Varningar vid >75% och >100%. Daglig budget-beräkning.
+- **Budget-defaults**: Spara standardbudget som auto-kopieras till nya månader
+- **Inkomster**: Logga månadsinkomster (lön, sidoinkomst, etc.)
+
+### Pengapusslet (skuldsaldo)
+- **Server-side skuldsaldoberäkning** via `calculate_debt` RPC — single source of truth
+- **Registrera betalningar** (Swish, kontant, etc.) med inline-formulär
+- **Betalningshistorik** med redigering och radering
+- **Detaljerad uppdelning**: expense_balance, payment_adjustment, net_balance per medlem
+
+### Gamification
+- **XP-system**: +25 XP per utgift, +10 XP per inkomst, daglig cap 200 XP
+- **Streaks**: Logga utgifter varje dag, +15/+25 XP bonus vid 7+/14+ dagar
+- **12 levels** (300 XP per level)
+- **12 achievements** att låsa upp
+- **Weekly challenges**: 3 slumpmässiga per vecka (75–200 XP per utmaning)
+- **Månadsbetyg**: S/A/B/C/D baserat på sparkvot
+
+### Hushåll
+- **Skapa/gå med** via inbjudningslänkar (race-safe via RPC)
+- **Realtime**: Live-updates via Supabase Realtime
+
+### Vyer
+- **Dashboard**: Level, streak, ekonom-analys, budget burn rate, pengapusslet, leaderboard
+- **AddExpense**: Logga utgift/inkomst med inline budget-varning + flash-varning efter loggning
+- **History**: Period-översikt (dag/vecka/månad) med hushåll/mitt-perspektiv, jämförelse, budget vs faktiskt, filter
 - **Quest Map**: Sparande-milstolpar
 - **Achievements**: 12 upplåsbara badges
-- **Weekly Challenges**: 3 slumpmässiga veckoutmaningar med XP-belöningar
-- **Savings Goals**: Personliga sparmål med deadline-stöd
-- **XP-system**: Daglig cap (200/dag), streak-bonus, atomisk via RPC
-- **Realtime**: Live-updates via Supabase Realtime
-- **History**: Period-översikt (dag/vecka/månad) med navigation, jämförelse med förra perioden, kategori- och personfilter
+- **Personal**: Personlig budget + sparmål med deadline
+- **Settings**: Månadsbudget-setup, kategori-definition, hushållsinställningar
+
+### Övrigt
+- **Auth**: Registrering + inloggning via Supabase Auth
 - **Error tracking**: Sentry-integration för felrapportering
 - **Mobiloptimerad**: Designad för 480px max-width
 
@@ -92,26 +115,25 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 |--------|-------------|
 | `households` | Hushållsinfo + invite codes |
 | `profiles` | Användarprofiler länkade till hushåll |
-| `expenses` | Utgifter (shared/personal) |
+| `expenses` | Utgifter (shared/personal) med amount + paid_amount |
 | `income` | Månadsinkomster per person |
-| `budgets` | Budgetkategorier per hushåll |
+| `budgets` | Budgetkategorier per hushåll (JSONB) |
 | `gamification` | XP, streaks, achievements |
 | `savings_goals` | Personliga sparmål |
 | `weekly_challenges` | Veckoutmaningar per användare |
 | `debt_payments` | Betalningar mellan hushållsmedlemmar |
+| `monthly_budgets` | Månadsbudget per kategori |
+| `budget_defaults` | Standardbudget per hushåll |
 
-Se `SPEC.md` för fullständigt schema, RPC-funktioner och RLS-policies.
+**9 RPC-funktioner** + 1 verifieringsfunktion. Se `SPEC.md` för fullständigt schema, RPC-specs och RLS-policies.
 
-## Gamification
+## Testsvit
 
-- **+25 XP** per loggad utgift
-- **+15 XP** streak-bonus vid 7+ dagars streak
-- **+25 XP** streak-bonus vid 14+ dagars streak
-- **Daglig cap**: 200 XP/dag
-- **12 levels** (300 XP per level)
-- **12 achievements** att låsa upp
-- **Weekly challenges**: 3 st per vecka (75–200 XP per utmaning)
-- **Månadsbetyg**: S/A/B/C/D baserat på sparkvot
+7 testfiler, 34 tester: join-flöde, utgiftsloggning, gamification, sparmål, veckoutmaningar, skuldsaldo, budget-status.
+
+```bash
+npm run test:run
+```
 
 ## CI/CD
 

@@ -160,6 +160,41 @@
 
 ---
 
+### monthly_budgets
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| month | text | NOT NULL | — |
+| category | text | NOT NULL | — |
+| budget_amount | numeric | NOT NULL | — |
+| created_by | uuid | NOT NULL | — |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Check:** `budget_amount > 0`
+**Unique:** `(household_id, month, category)`
+**Index:** PK `id`
+**FK:** `household_id → households(id) ON DELETE CASCADE`, `created_by → auth.users(id) ON DELETE CASCADE`
+
+---
+
+### budget_defaults
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| defaults | jsonb | NOT NULL | '{}' |
+
+**Unique:** `household_id`
+**Index:** PK `id`
+**FK:** `household_id → households(id) ON DELETE CASCADE`
+
+`defaults` JSONB-format: `{ "groceries": 5000, "transport": 2000, ... }` — mappar kategori-id till belopp.
+
+---
+
 ## RPC-funktioner
 
 ### add_xp(amount integer) → integer
@@ -205,7 +240,7 @@ Registrerar en betalning i pengapusslet. `SECURITY DEFINER`.
 
 - Validerar att `from` och `to` tillhör samma hushåll som anroparen
 - Validerar att `payment_amount > 0`
-- Skriver till `debt_payments`-tabellen (INTE budgets JSONB)
+- Skriver till `debt_payments`-tabellen
 - Returnerar nytt payment-UUID
 
 ### update_debt_payment(payment_id uuid, new_amount numeric, new_note text DEFAULT NULL) → void
@@ -221,8 +256,12 @@ Uppdaterar en befintlig betalning. `SECURITY DEFINER`.
 Beräknar skuldsaldo för hela hushållet. `STABLE SECURITY DEFINER`. Single source of truth.
 
 - Hämtar alla `shared`-utgifter och `debt_payments` för hushållet
-- Beräknar per medlem: `my_shared_total`, `fair_share`, `expense_balance`, `payment_adjustment`, `net_balance`
-- Formler: `expense_balance = my_shared_total - grand_total / member_count`, `net_balance = expense_balance + payment_adjustment`
+- Beräknar per medlem:
+  - `my_shared_total` — totalt belopp av delade utgifter användaren loggat
+  - `fair_share` — `grand_total / member_count`
+  - `expense_balance` — `my_shared_total - fair_share` (positiv = betalat mer, negativ = betalat mindre)
+  - `payment_adjustment` — `sent - received` (positiv = betalat mer skuld, negativ = fått mer betalningar)
+  - `net_balance` — `expense_balance + payment_adjustment` (positiv = andra skuldar dig)
 - Returnerar:
   ```json
   {
@@ -239,15 +278,55 @@ Beräknar skuldsaldo för hela hushållet. `STABLE SECURITY DEFINER`. Single sou
   }
   ```
 
+### get_budget_status(target_month text) → jsonb
+
+Beräknar budget vs faktiskt för en given månad. `STABLE SECURITY DEFINER`.
+
+- Hämtar alla `monthly_budgets` och `expenses` för hushållet och given månad
+- Beräknar per kategori:
+  - `budget_amount` — satt budget
+  - `household_spent` — SUM(amount) för alla utgifter i kategorin
+  - `my_spent` — SUM(shared / memberCount) + SUM(personal om user_id = auth.uid())
+  - `household_remaining` / `my_remaining`
+  - `household_pct` / `my_pct` — procentuell förbrukning
+  - `household_status` / `my_status` — `on_track` (≤75%), `warning` (>75%), `over_budget` (>100%)
+  - `daily_allowance` / `my_daily_allowance` — remaining / days_left (0 om över budget eller månad avslutad)
+- `days_left`: aktuell månad = kalender-dagar kvar, framtida = hela månaden, historisk = 0
+- Returnerar:
+  ```json
+  {
+    "month": "2026-03",
+    "household_id": "uuid",
+    "member_count": 2,
+    "days_in_month": 31,
+    "days_left": 14,
+    "categories": [
+      { "category": "groceries", "budget_amount": 5000, "household_spent": 3200, "my_spent": 1600, "household_remaining": 1800, "household_pct": 64.0, "household_status": "on_track", "daily_allowance": 128.57, ... }
+    ],
+    "totals": {
+      "budget": 15000, "household_spent": 8500, "household_remaining": 6500, "household_pct": 56.7, "daily_allowance": 464.29, ...
+    }
+  }
+  ```
+
 ### get_my_household_id() → uuid
 
 Hjälpfunktion som returnerar `profiles.household_id` för `auth.uid()`. Används i RLS-policies.
+
+### verify_debt_calculation() → jsonb
+
+Health check som jämför manuell skuld-beräkning med `calculate_debt()` RPC.
+
+- Kör helt separat logik (egen SQL) och jämför med RPC-resultatet per medlem
+- Jämför: `net_balance`, `expense_balance`, `payment_adjustment`
+- Returnerar: `{ ok: bool, household_id: uuid, diffs: [...], manual_check: [...] }`
+- Om `ok = true`: alla siffror matchar
 
 ---
 
 ## RLS-policies
 
-Alla 9 tabeller har RLS aktiverat (25 policies totalt).
+Alla 11 tabeller har RLS aktiverat (33 policies totalt).
 
 | Tabell | Policy | Cmd | Villkor |
 |--------|--------|-----|---------|
@@ -276,12 +355,61 @@ Alla 9 tabeller har RLS aktiverat (25 policies totalt).
 | debt_payments | debt_payments_select | SELECT | household_id = get_my_household_id() |
 | debt_payments | debt_payments_insert | INSERT | household_id = get_my_household_id() AND (from_user_id = auth.uid() OR to_user_id = auth.uid()) |
 | debt_payments | debt_payments_delete | DELETE | household_id = get_my_household_id() AND from_user_id = auth.uid() |
+| monthly_budgets | monthly_budgets_select | SELECT | household_id = get_my_household_id() |
+| monthly_budgets | monthly_budgets_insert | INSERT | household_id = get_my_household_id() |
+| monthly_budgets | monthly_budgets_update | UPDATE | household_id = get_my_household_id() |
+| monthly_budgets | monthly_budgets_delete | DELETE | household_id = get_my_household_id() |
+| budget_defaults | budget_defaults_select | SELECT | household_id = get_my_household_id() |
+| budget_defaults | budget_defaults_insert | INSERT | household_id = get_my_household_id() |
+| budget_defaults | budget_defaults_update | UPDATE | household_id = get_my_household_id() |
+| budget_defaults | budget_defaults_delete | DELETE | household_id = get_my_household_id() |
+
+---
+
+## UI-komponenter
+
+### Dashboard
+
+Layout (uppifrån och ner):
+1. **Level & XP** — ProgressRing, level-namn, XP-bar
+2. **Streak** — nuvarande streak, bästa streak
+3. **Ekonom-analys** — månadsbetyg (S/A/B/C/D), inkomst vs utgifter, sparkvo, jämförelse med förra månaden
+4. **Budget burn rate** — totalt kvar, daglig budget, total progress bar, varningar, per-kategori bars
+5. **Pengapusslet** (om >1 medlem) — skuld-kort, betalningshistorik, gemensamma utgifter
+6. **Leaderboard** — alla medlemmar rankade efter XP
+
+### History
+
+Tre tabbar: Utgifter, Statistik, Badges.
+
+**Utgifter-tabben:**
+- Hushåll/Mitt toggle (perspektiv)
+- Dag/Vecka/Månad toggle (periodläge)
+- Offset-navigation (← nuvarande →)
+- Period-sammanfattning: total, jämförelse, proportionell bar, topp kategorier med budget-bars
+- Grupperade utgifter (expanderbara i månads-vy)
+- Kategori- och person-filter med aktiva filter-pills
+
+### Settings
+
+- Hushållsinfo + invite-kod
+- Månadsbudget-setup (per kategori, med defaults och kopiera-funktioner)
+- Gemensam budget (kategori-definitionen via `budgets`-tabellen)
+- Valutainställning
+
+### AddExpense
+
+- Typ-toggle: Gemensam / Personlig / Inkomst
+- Belopp-input med split-mode (fullbelopp vs min del)
+- Kategori-grid med inline budget-varning (före loggning)
+- Flash budget-varning (efter loggning, 3 sek, vid >75%)
 
 ---
 
 ## XP-system
 
 - **+25 XP** per loggad utgift
+- **+10 XP** per loggad inkomst
 - **Streak-bonus:** +15 XP vid 7+ dagar, +25 XP vid 14+ dagar
 - **Daglig cap:** 200 XP/dag (hanteras atomiskt i `add_xp` RPC)
 - **Achievement XP:** varierar per achievement (50–500 XP)
@@ -364,6 +492,22 @@ Baserat på sparkvot (savings rate):
 | B | ≥ 10% |
 | C | ≥ 0% |
 | D | < 0% |
+
+---
+
+## Testsvit
+
+7 testfiler, 34 tester:
+
+| Fil | Tester | Beskrivning |
+|-----|--------|-------------|
+| `JoinPage.test.jsx` | 3 | Invite-flöde, rendering, felhantering |
+| `AddExpense.test.jsx` | 5 | Utgiftsloggning, validering, XP-tilldelning |
+| `useGamification.test.js` | 5 | XP-beräkning, streak-logik, achievements |
+| `useSavingsGoals.test.js` | 3 | Sparmål CRUD |
+| `useWeeklyChallenges.test.js` | 4 | Challenge-generering, completion |
+| `useDebtCalculation.test.js` | 7 | Skuldsaldo, betalningar, teckenbugg-regression |
+| `useBudgetStatus.test.js` | 7 | Budget-status, warning/over, daily_allowance, defaults |
 
 ---
 

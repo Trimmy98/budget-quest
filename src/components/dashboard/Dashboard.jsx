@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useExpenses, useBudget, useIncome } from '../../hooks/useExpenses'
+import { useBudgetStatus } from '../../hooks/useBudgetStatus'
+import { useWeeklyReport } from '../../hooks/useWeeklyReport'
 import { getLevelInfo, getMonthGrade, getCurrentMonth, DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
 import ProgressRing from '../shared/ProgressRing'
@@ -12,7 +14,9 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
   const { user, profile } = useAuth()
   const { expenses } = useExpenses(selectedMonth)
   const { budget, refetch: refetchBudget } = useBudget()
+  const { budgetStatus } = useBudgetStatus(selectedMonth)
   const { allIncome, myIncome } = useIncome(selectedMonth)
+  const weeklyReport = useWeeklyReport()
   const { symbol } = useCurrency()
   const [members, setMembers] = useState([])
   const [showPaymentForm, setShowPaymentForm] = useState(false)
@@ -26,6 +30,7 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
   const [editingPaymentId, setEditingPaymentId] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editNote, setEditNote] = useState('')
+  const [showAllBudgetCats, setShowAllBudgetCats] = useState(false)
   const [showAllSharedExpenses, setShowAllSharedExpenses] = useState(false)
   const [allTimeSharedExpenses, setAllTimeSharedExpenses] = useState([])
 
@@ -435,6 +440,389 @@ export default function Dashboard({ gamification, allGamification, selectedMonth
           </div>
         )}
       </div>
+
+      {/* ═══ BUDGET BURN RATE ═══ */}
+      {budgetStatus && budgetStatus.categories?.length > 0 && (() => {
+        const t = budgetStatus.totals
+        const cats = budgetStatus.categories
+        const daysLeft = budgetStatus.days_left
+        const pct = Number(t.household_pct) || 0
+        const barColor = pct > 90 ? '#ff6b6b' : pct > 75 ? '#ff9f43' : pct > 50 ? '#ffd93d' : '#00ff87'
+        const warnings = cats.filter(c => c.household_status === 'warning' || c.household_status === 'over_budget')
+        const visibleCats = showAllBudgetCats ? cats : cats.slice(0, 5)
+
+        return (
+          <div style={{
+            background: 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: '1px solid #1e293b', borderRadius: 20, padding: 16, marginBottom: 14,
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ fontSize: 28 }}>📊</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif', color: '#e2e8f0', letterSpacing: 1 }}>
+                  MÅNADSBUDGET
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  {daysLeft > 0 ? `${daysLeft} dagar kvar` : 'Månaden avslutad'}
+                </div>
+              </div>
+            </div>
+
+            {/* Total remaining + daily */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <div style={{
+                flex: 1, background: '#0b1120', borderRadius: 12, padding: '10px 12px',
+                border: '1px solid #1e293b', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 9, color: '#64748b', marginBottom: 3 }}>Kvar</div>
+                <div style={{
+                  fontFamily: 'Orbitron, sans-serif', fontSize: 22, fontWeight: 900,
+                  color: Number(t.household_remaining) >= 0 ? '#00ff87' : '#ff6b6b',
+                }}>
+                  {Number(t.household_remaining).toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
+                </div>
+              </div>
+              <div style={{
+                flex: 1, background: '#0b1120', borderRadius: 12, padding: '10px 12px',
+                border: '1px solid #1e293b', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 9, color: '#64748b', marginBottom: 3 }}>Daglig budget</div>
+                <div style={{
+                  fontFamily: 'Orbitron, sans-serif', fontSize: 22, fontWeight: 900,
+                  color: Number(t.daily_allowance) > 0 ? '#00f0ff' : '#ff6b6b',
+                }}>
+                  {Number(t.daily_allowance).toFixed(0)}{symbol}<span style={{ fontSize: 12, color: '#64748b' }}>/dag</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Total progress bar */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                  {Number(t.household_spent).toFixed(0)} / {Number(t.budget).toFixed(0)}{symbol}
+                </span>
+                <span style={{ fontSize: 10, color: barColor, fontWeight: 700 }}>{pct.toFixed(0)}%</span>
+              </div>
+              <div style={{ borderRadius: 6, overflow: 'hidden', height: 8, background: '#0b1120' }}>
+                <div style={{
+                  width: `${Math.min(pct, 100)}%`,
+                  height: '100%', borderRadius: 6,
+                  background: `linear-gradient(90deg, ${barColor}, ${barColor}cc)`,
+                  boxShadow: `0 0 8px ${barColor}40`,
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            </div>
+
+            {/* Varningar */}
+            {warnings.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {warnings.map(w => {
+                  const cat = allCats.find(c => c.id === w.category) || { icon: '📦', name: w.category }
+                  const isOver = w.household_status === 'over_budget'
+                  const overAmount = Number(w.household_spent) - Number(w.budget_amount)
+                  return (
+                    <div key={w.category} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
+                      background: isOver ? 'rgba(255,107,107,0.08)' : 'rgba(255,159,67,0.08)',
+                      border: `1px solid ${isOver ? 'rgba(255,107,107,0.2)' : 'rgba(255,159,67,0.2)'}`,
+                      borderRadius: 8, marginBottom: 4, fontSize: 11,
+                    }}>
+                      <span>{cat.icon}</span>
+                      <span style={{ color: isOver ? '#ff6b6b' : '#ff9f43', fontWeight: 600 }}>
+                        {cat.name}: {isOver
+                          ? `Över med ${overAmount.toFixed(0)}${symbol}`
+                          : `${Number(w.household_pct).toFixed(0)}% — sakta ner!`
+                        }
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Per-kategori */}
+            {visibleCats.map(c => {
+              const cat = allCats.find(ct => ct.id === c.category) || { icon: '📦', name: c.category }
+              const cpct = Number(c.household_pct) || 0
+              const cColor = cpct > 90 ? '#ff6b6b' : cpct > 75 ? '#ff9f43' : cpct > 50 ? '#ffd93d' : '#00ff87'
+              const isOver = c.household_status === 'over_budget'
+              return (
+                <div key={c.category} style={{ marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                    <span style={{ fontSize: 13 }}>{cat.icon}</span>
+                    <span style={{ fontSize: 11, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
+                    <span style={{ fontSize: 11, fontFamily: 'Orbitron, sans-serif', fontWeight: 700, color: isOver ? '#ff6b6b' : '#e2e8f0' }}>
+                      {Number(c.household_spent).toFixed(0)} / {Number(c.budget_amount).toFixed(0)}{symbol}
+                    </span>
+                    {Number(c.daily_allowance) > 0 && daysLeft > 0 && (
+                      <span style={{ fontSize: 9, color: '#64748b', marginLeft: 4 }}>
+                        {Number(c.daily_allowance).toFixed(0)}/dag
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ borderRadius: 4, overflow: 'hidden', height: 4, background: '#0b1120' }}>
+                    <div style={{
+                      width: `${Math.min(cpct, 100)}%`, height: '100%', borderRadius: 4,
+                      background: cColor, transition: 'width 0.4s ease',
+                    }} />
+                  </div>
+                </div>
+              )
+            })}
+
+            {cats.length > 5 && (
+              <button onClick={() => setShowAllBudgetCats(!showAllBudgetCats)} style={{
+                background: 'none', border: 'none', color: '#00f0ff', fontSize: 11,
+                fontFamily: 'Outfit, sans-serif', cursor: 'pointer', padding: '6px 0',
+                fontWeight: 600,
+              }}>
+                {showAllBudgetCats ? 'Visa färre' : `Visa alla kategorier (${cats.length})`}
+              </button>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* ═══ VECKORAPPORT ═══ */}
+      {(() => {
+        const wr = weeklyReport
+        const r = wr.report
+        const d = r?.data
+        const hasBudgets = d?.budget_status?.length > 0
+
+        return (
+          <div style={{
+            background: 'linear-gradient(135deg, #0f172a, #1a1040)',
+            border: '1px solid #1e293b', borderRadius: 20, padding: 16, marginBottom: 14,
+          }}>
+            {/* Header + navigation */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <button onClick={wr.goBack} style={{
+                background: 'none', border: 'none', color: '#00f0ff', fontSize: 20,
+                cursor: 'pointer', padding: '4px 8px',
+              }}>←</button>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{
+                  fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif',
+                  color: '#e2e8f0', letterSpacing: 1,
+                }}>
+                  📋 VECKORAPPORT
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  V.{wr.weekNumber} ({wr.dateRange})
+                </div>
+              </div>
+              <button onClick={wr.goForward} disabled={!wr.canGoForward} style={{
+                background: 'none', border: 'none', fontSize: 20, padding: '4px 8px',
+                color: wr.canGoForward ? '#00f0ff' : '#1e293b',
+                cursor: wr.canGoForward ? 'pointer' : 'default',
+              }}>→</button>
+            </div>
+
+            {wr.loading ? (
+              <div style={{ textAlign: 'center', padding: 30, color: '#64748b' }}>Genererar rapport...</div>
+            ) : !d || d.expense_count === 0 ? (
+              <div style={{
+                textAlign: 'center', padding: '24px 16px', color: '#475569', fontSize: 13,
+              }}>
+                Inga utgifter loggade denna vecka
+              </div>
+            ) : (
+              <>
+                {/* Total spenderat */}
+                <div style={{ textAlign: 'center', marginBottom: 12 }}>
+                  <div style={{
+                    fontFamily: 'Orbitron, sans-serif', fontSize: 32, fontWeight: 900,
+                    color: '#e2e8f0',
+                  }}>
+                    {Number(d.total_spent).toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
+                  </div>
+
+                  {/* Jämförelse */}
+                  {d.vs_last_week && (
+                    <div style={{
+                      fontSize: 12, fontWeight: 600, marginTop: 4,
+                      color: d.vs_last_week.direction === 'more' ? '#ff6b6b' : '#00ff87',
+                    }}>
+                      {d.vs_last_week.direction === 'more' ? '↑' : '↓'}{' '}
+                      {Math.abs(Number(d.vs_last_week.total_diff_percent)).toFixed(0)}%{' '}
+                      {d.vs_last_week.direction === 'more' ? 'mer' : 'mindre'} än förra veckan
+                      <span style={{ color: '#64748b', fontWeight: 400, marginLeft: 4 }}>
+                        ({d.vs_last_week.direction === 'more' ? '+' : ''}{Number(d.vs_last_week.total_diff_amount).toFixed(0)}{symbol})
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Snabb-stats */}
+                <div style={{
+                  display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 12,
+                  fontSize: 11, color: '#94a3b8',
+                }}>
+                  <span>{d.expense_count} utgifter</span>
+                  <span>•</span>
+                  <span>{Number(d.avg_per_day).toFixed(0)}{symbol}/dag i snitt</span>
+                </div>
+
+                {/* Proportionell bar: gemensamt vs personligt */}
+                {Number(d.total_spent) > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ borderRadius: 8, overflow: 'hidden', height: 20, display: 'flex', background: '#0b1120' }}>
+                      {Number(d.total_shared) > 0 && (
+                        <div style={{
+                          width: `${Number(d.total_shared) / Number(d.total_spent) * 100}%`,
+                          height: '100%',
+                          background: 'linear-gradient(135deg, #ff79c6, #ff5599)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 9, fontWeight: 700, color: '#020617',
+                          overflow: 'hidden', whiteSpace: 'nowrap',
+                        }}>
+                          {Number(d.total_shared) / Number(d.total_spent) * 100 > 25 && `Gemensamt ${Number(d.total_shared).toFixed(0)}${symbol}`}
+                        </div>
+                      )}
+                      {Number(d.total_personal) > 0 && (
+                        <div style={{
+                          width: `${Number(d.total_personal) / Number(d.total_spent) * 100}%`,
+                          height: '100%',
+                          background: 'linear-gradient(135deg, #a78bfa, #8b5cf6)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 9, fontWeight: 700, color: '#020617',
+                          overflow: 'hidden', whiteSpace: 'nowrap',
+                        }}>
+                          {Number(d.total_personal) / Number(d.total_spent) * 100 > 25 && `Personligt ${Number(d.total_personal).toFixed(0)}${symbol}`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-member breakdown */}
+                {d.per_member?.length > 1 && (
+                  <div style={{ marginBottom: 12 }}>
+                    {d.per_member.map(m => (
+                      <div key={m.user_id} style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '4px 0', fontSize: 12,
+                      }}>
+                        <span style={{ color: '#94a3b8' }}>
+                          {m.user_id === user?.id ? '👤' : '👥'} {m.name}
+                        </span>
+                        <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>
+                          {(Number(m.shared_paid) + Number(m.personal)).toFixed(0)}{symbol}
+                          <span style={{ color: '#64748b', fontWeight: 400, fontSize: 9, marginLeft: 4 }}>
+                            ({Number(m.shared_paid).toFixed(0)} gem + {Number(m.personal).toFixed(0)} pers)
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Topp kategorier */}
+                {d.top_categories?.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Topp kategorier</div>
+                    {d.top_categories.slice(0, 3).map(tc => {
+                      const cat = allCats.find(c => c.id === tc.category) || { icon: '📦', name: tc.category }
+                      return (
+                        <div key={tc.category} style={{
+                          display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0',
+                        }}>
+                          <span style={{ fontSize: 13 }}>{cat.icon}</span>
+                          <span style={{ fontSize: 11, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
+                          <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>
+                            {Number(tc.amount).toFixed(0)}{symbol}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Skuld-förändring */}
+                {d.debt_change && (Number(d.debt_change.start) !== 0 || Number(d.debt_change.end) !== 0 || Number(d.debt_change.payments) > 0) && (
+                  <div style={{
+                    background: '#0b1120', borderRadius: 10, padding: '8px 12px', marginBottom: 12,
+                    border: '1px solid #1e293b', fontSize: 11,
+                  }}>
+                    <span style={{ color: '#64748b' }}>Skuld: </span>
+                    <span style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                      {Number(d.debt_change.start).toFixed(0)} → {Number(d.debt_change.end).toFixed(0)}{symbol}
+                    </span>
+                    {Number(d.debt_change.payments) > 0 && (
+                      <span style={{ color: '#00ff87', marginLeft: 6 }}>
+                        ({Number(d.debt_change.payments).toFixed(0)}{symbol} betalat)
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Budget-status */}
+                {hasBudgets && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Budget hittills i månaden</div>
+                    {d.budget_status.slice(0, 4).map(bs => {
+                      const cat = allCats.find(c => c.id === bs.category) || { icon: '📦', name: bs.category }
+                      const pct = Number(bs.percent) || 0
+                      const barColor = pct > 90 ? '#ff6b6b' : pct > 75 ? '#ff9f43' : pct > 50 ? '#ffd93d' : '#00ff87'
+                      return (
+                        <div key={bs.category} style={{ marginBottom: 6 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                            <span style={{ fontSize: 11 }}>{cat.icon}</span>
+                            <span style={{ fontSize: 10, color: '#94a3b8', flex: 1 }}>{cat.name}</span>
+                            <span style={{ fontSize: 10, fontFamily: 'Orbitron, sans-serif', fontWeight: 700, color: barColor }}>
+                              {pct}%
+                            </span>
+                          </div>
+                          <div style={{ borderRadius: 3, overflow: 'hidden', height: 3, background: '#0b1120' }}>
+                            <div style={{
+                              width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 3,
+                              background: barColor, transition: 'width 0.4s ease',
+                            }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* AI-kommentar */}
+                {(r.ai_comment || wr.aiLoading) && (
+                  <div style={{
+                    background: 'linear-gradient(135deg, rgba(0,240,255,0.06), rgba(139,92,246,0.06))',
+                    border: '1px solid rgba(0,240,255,0.15)',
+                    borderRadius: 12, padding: '10px 14px',
+                  }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
+                    }}>
+                      <span style={{
+                        background: 'linear-gradient(135deg, #00f0ff, #8b5cf6)',
+                        color: '#020617', fontSize: 9, fontWeight: 800,
+                        padding: '2px 6px', borderRadius: 4,
+                        fontFamily: 'Orbitron, sans-serif',
+                      }}>AI</span>
+                      <span style={{ fontSize: 10, color: '#64748b' }}>Veckoanalys</span>
+                    </div>
+                    {wr.aiLoading ? (
+                      <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+                        Analyserar veckan...
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>
+                        {r.ai_comment}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ═══ PENGAPUSSLET ═══ */}
       {memberCount > 1 && debtData && (() => {

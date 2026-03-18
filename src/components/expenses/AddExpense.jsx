@@ -5,6 +5,7 @@ import { useBudget, useExpenses } from '../../hooks/useExpenses'
 import { useGamification } from '../../hooks/useGamification'
 import { useCurrency } from '../../hooks/useCurrency'
 import { DEFAULT_SHARED_CATEGORIES, DEFAULT_PERSONAL_CATEGORIES, getCurrentMonth } from '../../lib/constants'
+import { useBudgetStatus } from '../../hooks/useBudgetStatus'
 
 export default function AddExpense({ onExpenseAdded }) {
   const { user, profile } = useAuth()
@@ -12,6 +13,7 @@ export default function AddExpense({ onExpenseAdded }) {
   const { expenses } = useExpenses()
   const { awardXP, updateStreak, checkExpenseCount } = useGamification()
   const { symbol } = useCurrency()
+  const { budgetStatus } = useBudgetStatus()
 
   const [expenseType, setExpenseType] = useState('shared')
   const [amount, setAmount] = useState('')
@@ -22,6 +24,7 @@ export default function AddExpense({ onExpenseAdded }) {
   const [success, setSuccess] = useState('')
   const [memberCount, setMemberCount] = useState(1)
   const [splitMode, setSplitMode] = useState('full') // 'full' = jag betalade allt, 'mine' = redan min del
+  const [budgetWarning, setBudgetWarning] = useState(null)
 
   useEffect(() => {
     if (profile?.household_id) {
@@ -132,8 +135,27 @@ export default function AddExpense({ onExpenseAdded }) {
 
         setSuccess(`${parsed.toFixed(0)} ${symbol} loggad!`)
         setAmount('')
-        setCategory('')
         setDescription('')
+
+        // Check budget warning for this category
+        if (budgetStatus?.categories) {
+          const bc = budgetStatus.categories.find(c => c.category === category)
+          if (bc) {
+            const pctUsed = Number(bc.household_pct) || 0
+            if (pctUsed >= 75) {
+              const remaining = Number(bc.budget_amount) - Number(bc.household_spent)
+              setBudgetWarning({
+                category,
+                pct: pctUsed,
+                remaining,
+                over: pctUsed >= 100,
+              })
+              setTimeout(() => setBudgetWarning(null), 3000)
+            }
+          }
+        }
+
+        setCategory('')
         if (onExpenseAdded) onExpenseAdded()
       }
     } catch (err) {
@@ -486,6 +508,32 @@ export default function AddExpense({ onExpenseAdded }) {
           {success}
         </div>
       )}
+
+      {budgetWarning && (() => {
+        const cat = categories.find(c => c.id === budgetWarning.category)
+        const icon = budgetWarning.over ? '🚨' : '⚠️'
+        const color = budgetWarning.over ? '#ff6b6b' : '#ff9f43'
+        return (
+          <div style={{
+            background: `${color}12`,
+            border: `1px solid ${color}40`,
+            borderRadius: 10,
+            padding: '10px 14px',
+            marginBottom: 12,
+            animation: 'fadeIn 0.3s ease',
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 2 }}>
+              {icon} {cat?.icon} {cat?.name || budgetWarning.category}: {budgetWarning.pct.toFixed(0)}% av budget
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>
+              {budgetWarning.over
+                ? `Över budget med ${Math.abs(budgetWarning.remaining).toFixed(0)}${symbol}!`
+                : `Bara ${budgetWarning.remaining.toFixed(0)}${symbol} kvar`
+              }
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Submit */}
       {(() => {

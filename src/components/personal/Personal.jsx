@@ -5,6 +5,7 @@ import { useExpenses, useBudget, useIncome } from '../../hooks/useExpenses'
 import { getMonthGrade, getCurrentMonth, DEFAULT_PERSONAL_CATEGORIES } from '../../lib/constants'
 import { useCurrency } from '../../hooks/useCurrency'
 import { useSavingsGoals } from '../../hooks/useSavingsGoals'
+import { useBalance } from '../../hooks/useBalance'
 import ProgressBar from '../shared/ProgressBar'
 import Sentry from '../../lib/sentry'
 
@@ -18,6 +19,9 @@ export default function Personal({ selectedMonth }) {
   const [saved, setSaved] = useState(false)
   const { symbol } = useCurrency()
   const { goals, addGoal, deleteGoal } = useSavingsGoals()
+  const bal = useBalance()
+  const [balanceInput, setBalanceInput] = useState('')
+  const adjCount = bal.adjustmentCount || 0
   const [simCut, setSimCut] = useState(0)
   const [simExtra, setSimExtra] = useState(0)
   const [members, setMembers] = useState([])
@@ -86,8 +90,230 @@ export default function Personal({ selectedMonth }) {
     { label: '30%', pct: 0.3, color: '#00f0ff' },
   ]
 
+  // Saldo-graf (inline SVG)
+  function BalanceChart({ dailyData, startBalance }) {
+    if (!dailyData || dailyData.length < 2) return null
+    const W = 320, H = 120, PX = 8, PY = 12
+    const balances = dailyData.map(d => Number(d.balance))
+    const minB = Math.min(...balances, 0)
+    const maxB = Math.max(...balances, startBalance)
+    const range = maxB - minB || 1
+
+    const points = dailyData.map((d, i) => ({
+      x: PX + (i / (dailyData.length - 1)) * (W - PX * 2),
+      y: PY + (1 - (Number(d.balance) - minB) / range) * (H - PY * 2),
+    }))
+    const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+
+    // Noll-linje
+    const zeroY = minB < 0 ? PY + (1 - (0 - minB) / range) * (H - PY * 2) : null
+
+    // Prognoslinje: snitt-burn per dag → projicera 7 dagar
+    const lastBal = balances[balances.length - 1]
+    const totalBurn = Number(startBalance) - lastBal
+    const days = dailyData.length
+    const avgBurn = days > 1 ? totalBurn / (days - 1) : 0
+    const projDays = 7
+    const projEnd = lastBal - avgBurn * projDays
+    const projEndY = PY + (1 - (projEnd - minB) / Math.max(maxB - Math.min(minB, projEnd), 1)) * (H - PY * 2)
+    const lastPoint = points[points.length - 1]
+
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
+        {/* Gradient fill under line */}
+        <defs>
+          <linearGradient id="balFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#00f0ff" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#00f0ff" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={`${pathD} L${points[points.length - 1].x},${H - PY} L${points[0].x},${H - PY} Z`} fill="url(#balFill)" />
+        <path d={pathD} fill="none" stroke="#00f0ff" strokeWidth="2" strokeLinejoin="round" />
+
+        {/* Zero line */}
+        {zeroY != null && zeroY > PY && zeroY < H - PY && (
+          <line x1={PX} y1={zeroY} x2={W - PX} y2={zeroY} stroke="#ff6b6b" strokeWidth="1" strokeDasharray="4 3" opacity="0.5" />
+        )}
+
+        {/* Prognos */}
+        {avgBurn > 0 && (
+          <line x1={lastPoint.x} y1={lastPoint.y} x2={W - PX} y2={Math.min(Math.max(projEndY, PY), H - PY)}
+            stroke="#64748b" strokeWidth="1.5" strokeDasharray="4 3" />
+        )}
+
+        {/* Start och slut-dot */}
+        <circle cx={points[0].x} cy={points[0].y} r="3" fill="#00f0ff" />
+        <circle cx={lastPoint.x} cy={lastPoint.y} r="3" fill={lastBal >= 0 ? '#00ff87' : '#ff6b6b'} />
+
+        {/* Labels */}
+        <text x={points[0].x} y={points[0].y - 6} fill="#64748b" fontSize="8" textAnchor="start">{Number(startBalance).toFixed(0)}</text>
+        <text x={lastPoint.x} y={lastPoint.y - 6} fill={lastBal >= 0 ? '#00ff87' : '#ff6b6b'} fontSize="8" textAnchor="end" fontWeight="700">{lastBal.toFixed(0)}</text>
+      </svg>
+    )
+  }
+
   return (
     <div style={{ padding: '16px 16px 24px' }}>
+      {/* ═══ SALDO ═══ */}
+      {!bal.loading && (
+        bal.isSet ? (() => {
+          const b = bal.balance
+          const curBal = Number(b.current_balance)
+          const isNeg = curBal < 0
+          const startDate = new Date(b.starting_balance_date)
+          const startStr = `${startDate.getDate()} ${startDate.toLocaleString('sv-SE', { month: 'short' })}`
+          const topCats = {}
+          // Bygg top cats från daily_data (approximate) — we show from the hook data
+          const sharedPart = Number(b.shared_expenses_since)
+          const personalPart = Number(b.personal_expenses_since)
+
+          return (
+            <div style={{
+              background: 'linear-gradient(135deg, #0f172a, #15132a)',
+              border: `1px solid ${isNeg ? 'rgba(255,107,107,0.3)' : '#1e293b'}`,
+              borderRadius: 20, padding: 16, marginBottom: 14,
+            }}>
+              {/* Saldo */}
+              <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 4 }}>
+                  KONTOSALDO
+                </div>
+                <div style={{
+                  fontFamily: 'Orbitron, sans-serif', fontSize: 36, fontWeight: 900,
+                  color: isNeg ? '#ff6b6b' : '#00ff87',
+                  textShadow: isNeg ? '0 0 20px rgba(255,107,107,0.5)' : '0 0 20px rgba(0,255,135,0.5)',
+                }}>
+                  {curBal.toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
+                </div>
+                <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                  Startsaldo {Number(b.starting_balance).toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol} den {startStr}
+                </div>
+              </div>
+
+              {/* Inkomst / Utgifter */}
+              <div style={{
+                display: 'flex', justifyContent: 'center', gap: 16, marginTop: 8, marginBottom: 12,
+                fontSize: 12,
+              }}>
+                <span style={{ color: '#00ff87' }}>
+                  Inkomst: +{Number(b.income_since).toFixed(0)}{symbol}
+                </span>
+                <span style={{ color: '#ff6b6b' }}>
+                  Utgifter: −{Number(b.expenses_since).toFixed(0)}{symbol}
+                </span>
+              </div>
+
+              {isNeg && (
+                <div style={{
+                  background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.2)',
+                  borderRadius: 10, padding: '8px 12px', marginBottom: 12, textAlign: 'center',
+                  fontSize: 12, color: '#ff6b6b', fontWeight: 600,
+                }}>
+                  ⚠️ Negativt saldo — du spenderar mer än du har!
+                </div>
+              )}
+
+              {/* Graf */}
+              {b.daily_data?.length >= 2 && (
+                <div style={{ marginBottom: 12 }}>
+                  <BalanceChart dailyData={b.daily_data} startBalance={Number(b.starting_balance)} />
+                </div>
+              )}
+
+              {/* Uppdelning */}
+              <div style={{
+                display: 'flex', gap: 6, marginBottom: 8,
+              }}>
+                <div style={{
+                  flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                  border: '1px solid #1e293b', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 8, color: '#64748b', marginBottom: 2 }}>Gemensamt (din del)</div>
+                  <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#ff79c6' }}>
+                    {sharedPart.toFixed(0)}{symbol}
+                  </div>
+                </div>
+                <div style={{
+                  flex: 1, background: '#0b1120', borderRadius: 10, padding: '8px 10px',
+                  border: '1px solid #1e293b', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 8, color: '#64748b', marginBottom: 2 }}>Personligt</div>
+                  <div style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 14, fontWeight: 700, color: '#a78bfa' }}>
+                    {personalPart.toFixed(0)}{symbol}
+                  </div>
+                </div>
+              </div>
+
+              {/* Länk till Settings */}
+              <div style={{ fontSize: 10, color: '#475569', fontFamily: 'Outfit, sans-serif', marginTop: 2 }}>
+                {adjCount > 0 && (
+                  <span style={{ color: '#a78bfa' }}>{adjCount} justering{adjCount !== 1 ? 'ar' : ''} · </span>
+                )}
+                <span>Hantera i Inställningar →</span>
+              </div>
+            </div>
+          )
+        })() : (
+          /* Setup-UI: sätt startsaldo */
+          <div style={{
+            background: 'linear-gradient(135deg, #0f172a, #15132a)',
+            border: '1px solid rgba(0,240,255,0.2)',
+            borderRadius: 20, padding: 20, marginBottom: 14, textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>💰</div>
+            <div style={{
+              fontSize: 14, fontWeight: 800, fontFamily: 'Orbitron, sans-serif',
+              color: '#e2e8f0', letterSpacing: 1, marginBottom: 6,
+            }}>
+              SÄTT DITT STARTSALDO
+            </div>
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
+              Hur mycket har du på kontot just nu?
+            </div>
+            <div style={{ display: 'flex', gap: 8, maxWidth: 280, margin: '0 auto' }}>
+              <input
+                type="number"
+                autoFocus
+                placeholder="0"
+                value={balanceInput}
+                onChange={e => setBalanceInput(e.target.value)}
+                style={{
+                  flex: 1, background: '#0b1120', border: '2px solid #1e293b',
+                  borderRadius: 12, padding: '12px 14px',
+                  color: '#00f0ff', fontFamily: 'Orbitron, sans-serif', fontSize: 20,
+                  fontWeight: 700, outline: 'none', textAlign: 'center',
+                }}
+                onFocus={e => e.target.style.borderColor = '#00f0ff'}
+                onBlur={e => e.target.style.borderColor = '#1e293b'}
+              />
+              <span style={{
+                display: 'flex', alignItems: 'center', color: '#64748b',
+                fontFamily: 'Orbitron, sans-serif', fontSize: 18,
+              }}>{symbol}</span>
+            </div>
+            <button
+              onClick={async () => {
+                const amt = parseFloat(balanceInput)
+                if (isNaN(amt)) return
+                await bal.setStartingBalance(amt)
+                setBalanceInput('')
+              }}
+              disabled={!balanceInput || bal.saving}
+              style={{
+                marginTop: 12, padding: '12px 32px',
+                background: balanceInput ? 'linear-gradient(135deg, #00f0ff, #0080ff)' : '#1e293b',
+                border: 'none', borderRadius: 12, cursor: balanceInput ? 'pointer' : 'default',
+                color: balanceInput ? '#020617' : '#475569',
+                fontFamily: 'Outfit, sans-serif', fontWeight: 700, fontSize: 14,
+                boxShadow: balanceInput ? '0 0 20px rgba(0,240,255,0.3)' : 'none',
+              }}
+            >
+              {bal.saving ? 'Sparar...' : 'Spara startsaldo'}
+            </button>
+          </div>
+        )
+      )}
+
       {/* Income Input */}
       <div style={{
         background: 'linear-gradient(135deg, #0f172a, #1e293b)',
