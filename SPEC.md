@@ -142,6 +142,24 @@
 
 ---
 
+### debt_payments
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| from_user_id | uuid | NOT NULL | — |
+| to_user_id | uuid | NOT NULL | — |
+| amount | numeric | NOT NULL | — |
+| note | text | NULL | — |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Check:** `amount > 0`
+**Index:** PK `id`, INDEX `household_id`, INDEX `(household_id, created_at DESC)`
+**FK:** `household_id → households(id) ON DELETE CASCADE`, `from_user_id → auth.users(id) ON DELETE CASCADE`, `to_user_id → auth.users(id) ON DELETE CASCADE`
+
+---
+
 ## RPC-funktioner
 
 ### add_xp(amount integer) → integer
@@ -181,14 +199,45 @@ Slår upp hushåll utan att joina.
 - Returnerar: `(id uuid, name text, max_members integer)`
 - Ersätter den gamla `households_select_by_invite` RLS-policyn
 
-### register_debt_payment(from_user_id uuid, to_user_id uuid, payment_amount numeric) → void
+### register_debt_payment(from_user_id uuid, to_user_id uuid, payment_amount numeric, payment_note text DEFAULT NULL) → uuid
 
-Registrerar en Swish-betalning i pengapusslet.
+Registrerar en betalning i pengapusslet. `SECURITY DEFINER`.
 
 - Validerar att `from` och `to` tillhör samma hushåll som anroparen
 - Validerar att `payment_amount > 0`
-- Appendar betalningen till `budgets.debt_payments` JSONB-array
-- Kringgår RLS (admin-only) genom att köra som `SECURITY DEFINER` implicit via RPC
+- Skriver till `debt_payments`-tabellen (INTE budgets JSONB)
+- Returnerar nytt payment-UUID
+
+### update_debt_payment(payment_id uuid, new_amount numeric, new_note text DEFAULT NULL) → void
+
+Uppdaterar en befintlig betalning. `SECURITY DEFINER`.
+
+- Validerar att `new_amount > 0`
+- Uppdaterar bara om `from_user_id = auth.uid()` (avsändaren)
+- Kastar exception om betalningen inte hittas eller anroparen inte är avsändaren
+
+### calculate_debt() → jsonb
+
+Beräknar skuldsaldo för hela hushållet. `STABLE SECURITY DEFINER`. Single source of truth.
+
+- Hämtar alla `shared`-utgifter och `debt_payments` för hushållet
+- Beräknar per medlem: `my_shared_total`, `fair_share`, `expense_balance`, `payment_adjustment`, `net_balance`
+- Formler: `expense_balance = my_shared_total - grand_total / member_count`, `net_balance = expense_balance + payment_adjustment`
+- Returnerar:
+  ```json
+  {
+    "household_id": "uuid",
+    "member_count": 2,
+    "grand_total": 1234.50,
+    "fair_share_per_person": 617.25,
+    "members": [
+      { "user_id": "uuid", "display_name": "...", "my_shared_total": 800, "fair_share": 617.25, "expense_balance": 182.75, "payment_adjustment": -50, "net_balance": 132.75 }
+    ],
+    "payments": [
+      { "id": "uuid", "from_user_id": "uuid", "to_user_id": "uuid", "amount": 50, "note": "Swish", "created_at": "..." }
+    ]
+  }
+  ```
 
 ### get_my_household_id() → uuid
 
@@ -198,7 +247,7 @@ Hjälpfunktion som returnerar `profiles.household_id` för `auth.uid()`. Använd
 
 ## RLS-policies
 
-Alla 8 tabeller har RLS aktiverat.
+Alla 9 tabeller har RLS aktiverat (25 policies totalt).
 
 | Tabell | Policy | Cmd | Villkor |
 |--------|--------|-----|---------|
@@ -224,6 +273,9 @@ Alla 8 tabeller har RLS aktiverat.
 | gamification | gamification_update | UPDATE | user_id = auth.uid() |
 | savings_goals | users_own_goals | ALL | user_id = auth.uid() |
 | weekly_challenges | users_own_challenges | ALL | user_id = auth.uid() |
+| debt_payments | debt_payments_select | SELECT | household_id = get_my_household_id() |
+| debt_payments | debt_payments_insert | INSERT | household_id = get_my_household_id() AND (from_user_id = auth.uid() OR to_user_id = auth.uid()) |
+| debt_payments | debt_payments_delete | DELETE | household_id = get_my_household_id() AND from_user_id = auth.uid() |
 
 ---
 

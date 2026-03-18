@@ -74,7 +74,7 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 - **Auth**: Registrering + inloggning via Supabase Auth
 - **Hushåll**: Skapa/gå med i hushåll med inbjudningslänkar (race-safe via RPC)
 - **Utgifter**: Logga gemensamma och personliga utgifter med split-lägen
-- **Pengapusslet**: Automatisk skuldsaldohantering mellan hushållsmedlemmar
+- **Pengapusslet**: Server-side skuldsaldoberäkning (`calculate_debt` RPC), betalningshistorik med edit/delete, inline betalningsformulär
 - **Dashboard**: Level, streak, leaderboard, månadsbetyg
 - **Quest Map**: Sparande-milstolpar
 - **Achievements**: 12 upplåsbara badges
@@ -82,6 +82,7 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 - **Savings Goals**: Personliga sparmål med deadline-stöd
 - **XP-system**: Daglig cap (200/dag), streak-bonus, atomisk via RPC
 - **Realtime**: Live-updates via Supabase Realtime
+- **History**: Period-översikt (dag/vecka/månad) med navigation, jämförelse med förra perioden, kategori- och personfilter
 - **Error tracking**: Sentry-integration för felrapportering
 - **Mobiloptimerad**: Designad för 480px max-width
 
@@ -97,6 +98,7 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 | `gamification` | XP, streaks, achievements |
 | `savings_goals` | Personliga sparmål |
 | `weekly_challenges` | Veckoutmaningar per användare |
+| `debt_payments` | Betalningar mellan hushållsmedlemmar |
 
 Se `SPEC.md` för fullständigt schema, RPC-funktioner och RLS-policies.
 

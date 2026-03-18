@@ -76,17 +76,18 @@ eslint.config.js       # ESLint flat config
 
 Se `SPEC.md` för fullständigt schema med kolumner, index, FK och RLS-policies.
 
-**Tabeller (8 st):**
+**Tabeller (9 st):**
 - `households` — hushåll med invite_code, admin_id, max_members
 - `profiles` — användarprofiler, kopplade till household
 - `expenses` — utgifter (shared/personal), med `amount` (NOT NULL) och `paid_amount` (NOT NULL, default 0)
 - `income` — inkomster per månad
-- `budgets` — budgetkategorier (JSONB), debt_payments (JSONB), updated_at (auto-trigger)
+- `budgets` — budgetkategorier (JSONB), updated_at (auto-trigger)
 - `gamification` — XP, streaks, achievements, daily_xp_awarded, last_xp_date
 - `savings_goals` — personliga sparmål (name, target_amount, current_amount, deadline)
 - `weekly_challenges` — veckoutmaningar per användare (challenges JSONB, week_start)
+- `debt_payments` — betalningar mellan hushållsmedlemmar (from_user_id, to_user_id, amount, note)
 
-**RPC-funktioner (6 st):** `add_xp`, `update_streak`, `join_household`, `lookup_household_by_invite`, `register_debt_payment`, `get_my_household_id`
+**RPC-funktioner (8 st):** `add_xp`, `update_streak`, `join_household`, `lookup_household_by_invite`, `register_debt_payment`, `update_debt_payment`, `calculate_debt`, `get_my_household_id`
 
 ## Viktiga mönster och regler
 
@@ -108,13 +109,21 @@ Vid gemensamma utgifter finns två lägen:
 `amount` används för budgetberäkningar (varje persons del = amount/memberCount).
 `paid_amount` används för pengapusslet (skuldsaldo mellan medlemmar).
 
-### Pengapusslet (skuldsaldo)
+### Pengapusslet (skuldsaldo) — ALLTID via `calculate_debt` RPC
 
-Beräknar vem som lagt ut mer/mindre av gemensamma utgifter:
-- `fairShare = sharedTotal / memberCount` (baserat på totalkostnad, INTE summan av betalningar)
-- `balance = paid + swish-justeringar - fairShare`
-- Positiv balance = har lagt ut mer (andra är skyldiga dig)
-- Swish-betalningar registreras via RPC `register_debt_payment` (validerar att from/to tillhör samma hushåll)
+Skuldsaldo beräknas **helt server-side** via `calculate_debt()` RPC. Gör **aldrig** klient-side beräkningar av skuld.
+
+- `calculate_debt()` returnerar: `{ household_id, member_count, grand_total, fair_share_per_person, members: [...], payments: [...] }`
+- Varje medlem har: `my_shared_total`, `fair_share`, `expense_balance`, `payment_adjustment`, `net_balance`
+- `net_balance = expense_balance + payment_adjustment` (positiv = andra skuldar dig)
+- Betalningar registreras via `register_debt_payment` RPC (skriver till `debt_payments`-tabellen)
+- Betalningar redigeras via `update_debt_payment` RPC (validerar att from_user_id = auth.uid())
+- Dashboard har Realtime-subscriptions på `expenses` och `debt_payments` som triggar `fetchDebtData()`
+
+**UI-struktur i Dashboard (3 kort):**
+1. Skuld-kort med detaljerad uppdelning + inline betalningsformulär
+2. Betalningshistorik med edit/delete
+3. Lista gemensamma utgifter (all-time)
 
 ### Nya FK:s — använd ON DELETE CASCADE
 
@@ -130,9 +139,19 @@ Utgifter hämtas per månad via `useExpenses(selectedMonth)`. Format: `"YYYY-MM"
 2. Onboarding (profil skapas i ETT insert i sista steget)
 3. Join via invite-länk (`/join/:code`) eller `?invite=CODE` — använder `join_household` RPC (atomisk, race-safe)
 
+### History-vy (period-översikt)
+
+History har tre tabbar: **Utgifter**, **Statistik**, **Badges**.
+
+Utgifter-tabben har:
+- **Periodlägen**: dag/vecka/månad med offset-navigation (← →)
+- **Gruppering**: dag-vy visar enskilda utgifter, vecka grupperar per dag, månad grupperar per vecka
+- **Jämförelse med förra perioden**: procentuell och absolut ändring, största kategoriförändringar
+- **Filter**: kategori + person-dropdown med aktiva filter-pills
+
 ### RLS (Row Level Security)
 
-Alla 8 tabeller har RLS aktiverat. Hjälpfunktionen `get_my_household_id()` returnerar inloggad användares household_id.
+Alla 9 tabeller har RLS aktiverat. Hjälpfunktionen `get_my_household_id()` returnerar inloggad användares household_id.
 
 - **households**: SELECT för eget hushåll + admin, INSERT/UPDATE bara admin
 - **profiles**: SELECT för eget hushåll, INSERT/UPDATE bara egen profil
@@ -142,6 +161,7 @@ Alla 8 tabeller har RLS aktiverat. Hjälpfunktionen `get_my_household_id()` retu
 - **gamification**: SELECT hela hushållet, INSERT/UPDATE bara egen user_id
 - **savings_goals**: ALL scoped till user_id = auth.uid()
 - **weekly_challenges**: ALL scoped till user_id = auth.uid()
+- **debt_payments**: SELECT hela hushållet, INSERT om from/to = auth.uid(), DELETE bara from_user_id = auth.uid()
 
 **OBS:** `households_select_by_invite`-policyn finns inte längre — invite-lookup görs via `lookup_household_by_invite` RPC istället.
 
