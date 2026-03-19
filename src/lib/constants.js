@@ -47,6 +47,7 @@ export const DEFAULT_SHARED_CATEGORIES = [
   { id: 'health', icon: '💪', name: 'Hälsa & Träning', budget: 200 },
   { id: 'entertainment', icon: '🎮', name: 'Nöje & Streaming', budget: 150 },
   { id: 'utilities', icon: '⚡', name: 'El & Internet', budget: 120 },
+  { id: 'cash', icon: '💵', name: 'Uttag av cash', budget: 0 },
 ]
 
 export const DEFAULT_PERSONAL_CATEGORIES = [
