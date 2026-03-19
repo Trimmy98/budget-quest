@@ -124,20 +124,56 @@ export function useBalance() {
     if (!user) return
     setSaving(true)
     try {
-      // Radera alla balance_events
       const { error } = await supabase
         .from('balance_events')
         .delete()
         .eq('user_id', user.id)
       if (error) throw error
-      // Nollställ profiles-cache
       await supabase
         .from('profiles')
-        .update({ starting_balance: null, starting_balance_date: null })
+        .update({ starting_balance: null, starting_balance_date: null, savings_tracking_start: null })
         .eq('id', user.id)
       setBalance(null)
     } catch (err) {
       console.error('resetBalance error:', err)
+      Sentry.captureException(err)
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function resetSavings() {
+    if (!user) return
+    setSaving(true)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ savings_tracking_start: new Date().toISOString() })
+        .eq('id', user.id)
+      if (error) throw error
+      await fetchBalance()
+    } catch (err) {
+      console.error('resetSavings error:', err)
+      Sentry.captureException(err)
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function setSavingsDate(dateStr) {
+    if (!user) return
+    setSaving(true)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ savings_tracking_start: new Date(dateStr).toISOString() })
+        .eq('id', user.id)
+      if (error) throw error
+      await fetchBalance()
+    } catch (err) {
+      console.error('setSavingsDate error:', err)
       Sentry.captureException(err)
       throw err
     } finally {
@@ -152,8 +188,15 @@ export function useBalance() {
     isSet: balance !== null && balance !== undefined,
     events: balance?.events || [],
     adjustmentCount: balance?.adjustment_count || 0,
+    savingsAmount: balance?.savings_amount ?? null,
+    savingsBalanceAtStart: balance?.savings_balance_at_start ?? null,
+    savingsTrackingStart: balance?.savings_tracking_start ?? null,
+    savingsPeriodIncome: balance?.savings_period_income ?? 0,
+    savingsPeriodExpenses: balance?.savings_period_expenses ?? 0,
     setStartingBalance,
     resetBalance,
+    resetSavings,
+    setSavingsDate,
     addEvent,
     deleteEvent,
     refetch: fetchBalance,

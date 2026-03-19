@@ -91,7 +91,7 @@ export default function Personal({ selectedMonth }) {
   ]
 
   // Saldo-graf (inline SVG)
-  function BalanceChart({ dailyData, startBalance }) {
+  function BalanceChart({ dailyData, startBalance, savingsTrackingStart }) {
     if (!dailyData || dailyData.length < 2) return null
     const W = 320, H = 120, PX = 8, PY = 12
     const balances = dailyData.map(d => Number(d.balance))
@@ -144,6 +144,21 @@ export default function Personal({ selectedMonth }) {
         {/* Start och slut-dot */}
         <circle cx={points[0].x} cy={points[0].y} r="3" fill="#00f0ff" />
         <circle cx={lastPoint.x} cy={lastPoint.y} r="3" fill={lastBal >= 0 ? '#00ff87' : '#ff6b6b'} />
+
+        {/* Savings tracking start marker */}
+        {savingsTrackingStart && (() => {
+          const savDate = savingsTrackingStart.slice(0, 10)
+          const idx = dailyData.findIndex(d => d.date >= savDate)
+          if (idx < 0 || idx >= dailyData.length) return null
+          const mx = PX + (idx / (dailyData.length - 1)) * (W - PX * 2)
+          return (
+            <>
+              <line x1={mx} y1={PY} x2={mx} y2={H - PY}
+                stroke="#ffd93d" strokeWidth="1" strokeDasharray="3 2" opacity="0.6" />
+              <text x={mx} y={H - 2} fill="#ffd93d" fontSize="6" textAnchor="middle" opacity="0.8">Sparstart</text>
+            </>
+          )
+        })()}
 
         {/* Labels */}
         <text x={points[0].x} y={points[0].y - 6} fill="#64748b" fontSize="8" textAnchor="start">{Number(startBalance).toFixed(0)}</text>
@@ -216,7 +231,8 @@ export default function Personal({ selectedMonth }) {
               {/* Graf */}
               {b.daily_data?.length >= 2 && (
                 <div style={{ marginBottom: 12 }}>
-                  <BalanceChart dailyData={b.daily_data} startBalance={Number(b.starting_balance)} />
+                  <BalanceChart dailyData={b.daily_data} startBalance={Number(b.starting_balance)}
+                    savingsTrackingStart={b.savings_tracking_start} />
                 </div>
               )}
 
@@ -243,6 +259,61 @@ export default function Personal({ selectedMonth }) {
                   </div>
                 </div>
               </div>
+
+              {/* ═══ SPARANDE ═══ */}
+              {(() => {
+                const savAmt = Number(b.savings_amount || 0)
+                const savInc = Number(b.savings_period_income || 0)
+                const savExp = Number(b.savings_period_expenses || 0)
+                const savStart = b.savings_tracking_start
+                const savDate = savStart ? new Date(savStart) : null
+                const savDateStr = savDate
+                  ? `${savDate.getDate()} ${savDate.toLocaleString('sv-SE', { month: 'short' })} ${savDate.getFullYear()}`
+                  : ''
+                const isPos = savAmt > 0
+                const isNeutral = savAmt === 0
+
+                return (
+                  <div style={{
+                    background: isPos ? 'rgba(0,255,135,0.04)' : isNeutral ? 'rgba(100,116,139,0.04)' : 'rgba(255,107,107,0.04)',
+                    border: `1px solid ${isPos ? 'rgba(0,255,135,0.15)' : isNeutral ? '#1e293b' : 'rgba(255,107,107,0.15)'}`,
+                    borderRadius: 14, padding: 12, marginBottom: 8, textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: 9, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 1, marginBottom: 4 }}>
+                      SPARANDE
+                    </div>
+                    <div style={{
+                      fontFamily: 'Orbitron, sans-serif', fontSize: 24, fontWeight: 900,
+                      color: isPos ? '#00ff87' : isNeutral ? '#64748b' : '#ff6b6b',
+                    }}>
+                      {isPos ? '↑' : isNeutral ? '' : '↓'} {isPos ? '+' : ''}{savAmt.toLocaleString('sv-SE', { maximumFractionDigits: 0 })}{symbol}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
+                      Sedan {savDateStr}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
+                      Inkomst: {savInc.toFixed(0)}{symbol} − Utgifter: {savExp.toFixed(0)}{symbol} = {isPos ? '+' : ''}{savAmt.toFixed(0)}{symbol}
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Nollställa sparräknaren? Sparande börjar räknas från idag.')) {
+                          bal.resetSavings()
+                        }
+                      }}
+                      disabled={bal.saving}
+                      style={{
+                        marginTop: 8, background: 'rgba(255,217,61,0.08)',
+                        border: '1px solid rgba(255,217,61,0.2)',
+                        borderRadius: 8, padding: '5px 14px', color: '#ffd93d',
+                        cursor: 'pointer', fontSize: 10, fontWeight: 600,
+                        fontFamily: 'Outfit, sans-serif',
+                      }}
+                    >
+                      Nollställ sparande
+                    </button>
+                  </div>
+                )
+              })()}
 
               {/* Länk till Settings */}
               <div style={{ fontSize: 10, color: '#475569', fontFamily: 'Outfit, sans-serif', marginTop: 2 }}>

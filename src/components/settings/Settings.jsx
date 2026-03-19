@@ -30,7 +30,7 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   const [regenerating, setRegenerating] = useState(false)
 
   // Startsaldo
-  const { balance, loading: balanceLoading, saving: balanceSaving, isSet: balanceIsSet, events: balanceEvents, setStartingBalance, resetBalance, addEvent: addBalanceEvent, deleteEvent: deleteBalanceEvent } = useBalance()
+  const { balance, loading: balanceLoading, saving: balanceSaving, isSet: balanceIsSet, events: balanceEvents, savingsTrackingStart, setStartingBalance, resetBalance, resetSavings, setSavingsDate, addEvent: addBalanceEvent, deleteEvent: deleteBalanceEvent } = useBalance()
   const [editingBalance, setEditingBalance] = useState(false)
   const [balanceInput, setBalanceInput] = useState('')
   const [confirmReset, setConfirmReset] = useState(false)
@@ -38,6 +38,9 @@ export default function Settings({ selectedMonth, onMonthChange }) {
   const [adjAmount, setAdjAmount] = useState('')
   const [adjNote, setAdjNote] = useState('')
   const [deletingEventId, setDeletingEventId] = useState(null)
+  const [editingSavingsDate, setEditingSavingsDate] = useState(false)
+  const [savingsDateInput, setSavingsDateInput] = useState('')
+  const [confirmResetSavings, setConfirmResetSavings] = useState(false)
 
   // Transaction management
   const [editingEntry, setEditingEntry] = useState(null) // { type: 'expense'|'income', id, amount, description, category }
@@ -818,6 +821,143 @@ export default function Settings({ selectedMonth, onMonthChange }) {
                 Nollställ allt →
               </button>
             )}
+
+            {/* Sparande-tracking */}
+            <div style={{
+              marginTop: 14, paddingTop: 12,
+              borderTop: '1px solid #1e293b',
+            }}>
+              <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'Orbitron, sans-serif', letterSpacing: 0.5, marginBottom: 8 }}>
+                SPARANDE-TRACKING
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
+                Trackas sedan: <span style={{ color: '#ffd93d', fontWeight: 600 }}>
+                  {savingsTrackingStart
+                    ? new Date(savingsTrackingStart).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })
+                    : new Date(balance.starting_balance_date).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })
+                  }
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {confirmResetSavings ? (
+                  <div style={{
+                    flex: 1, display: 'flex', gap: 6, alignItems: 'center',
+                    background: 'rgba(255,217,61,0.06)', border: '1px solid rgba(255,217,61,0.2)',
+                    borderRadius: 10, padding: '6px 10px',
+                  }}>
+                    <span style={{ fontSize: 11, color: '#ffd93d', flex: 1 }}>
+                      Nollställa? Börjar räkna från idag.
+                    </span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await resetSavings()
+                          setConfirmResetSavings(false)
+                          addToast('Sparande nollställt', 'success', '📊')
+                        } catch { addToast('Kunde inte nollställa', 'error') }
+                      }}
+                      style={{
+                        background: '#ffd93d', border: 'none', borderRadius: 8,
+                        padding: '5px 12px', color: '#020617', fontWeight: 700, fontSize: 11,
+                        cursor: 'pointer', fontFamily: 'Outfit, sans-serif', flexShrink: 0,
+                      }}
+                    >
+                      Ja
+                    </button>
+                    <button
+                      onClick={() => setConfirmResetSavings(false)}
+                      style={{
+                        background: 'transparent', border: '1px solid #334155', borderRadius: 8,
+                        padding: '5px 10px', color: '#94a3b8', cursor: 'pointer', fontSize: 11,
+                        fontFamily: 'Outfit, sans-serif', flexShrink: 0,
+                      }}
+                    >
+                      Nej
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmResetSavings(true)}
+                    style={{
+                      flex: 1, background: 'rgba(255,217,61,0.08)',
+                      border: '1px solid rgba(255,217,61,0.2)',
+                      borderRadius: 10, padding: '8px 0',
+                      color: '#ffd93d', cursor: 'pointer', fontSize: 12,
+                      fontWeight: 600, fontFamily: 'Outfit, sans-serif',
+                    }}
+                  >
+                    Nollställ sparande
+                  </button>
+                )}
+                {editingSavingsDate ? (
+                  <div style={{
+                    flex: 1, background: '#0b1120', borderRadius: 10, padding: 8,
+                  }}>
+                    <input
+                      type="date"
+                      value={savingsDateInput}
+                      onChange={e => setSavingsDateInput(e.target.value)}
+                      style={{
+                        width: '100%', background: '#020617', border: '1px solid #1e293b',
+                        borderRadius: 8, padding: '6px 8px', color: '#e2e8f0',
+                        fontFamily: 'Outfit, sans-serif', fontSize: 12, outline: 'none',
+                        marginBottom: 4, boxSizing: 'border-box',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={async () => {
+                          if (!savingsDateInput) return
+                          try {
+                            await setSavingsDate(savingsDateInput)
+                            setEditingSavingsDate(false)
+                            setSavingsDateInput('')
+                            addToast('Spardatum uppdaterat', 'success', '📊')
+                          } catch { addToast('Kunde inte uppdatera', 'error') }
+                        }}
+                        disabled={!savingsDateInput}
+                        style={{
+                          flex: 1, background: savingsDateInput ? '#ffd93d' : '#1e293b',
+                          border: 'none', borderRadius: 8, padding: '6px 0',
+                          color: '#020617', fontWeight: 700, fontSize: 11,
+                          cursor: savingsDateInput ? 'pointer' : 'not-allowed',
+                          fontFamily: 'Outfit, sans-serif',
+                        }}
+                      >
+                        OK
+                      </button>
+                      <button
+                        onClick={() => { setEditingSavingsDate(false); setSavingsDateInput('') }}
+                        style={{
+                          background: 'transparent', border: '1px solid #334155', borderRadius: 8,
+                          padding: '6px 10px', color: '#94a3b8', cursor: 'pointer', fontSize: 11,
+                          fontFamily: 'Outfit, sans-serif',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      const d = savingsTrackingStart || balance.starting_balance_date
+                      setSavingsDateInput(new Date(d).toISOString().split('T')[0])
+                      setEditingSavingsDate(true)
+                    }}
+                    style={{
+                      flex: 1, background: 'rgba(100,116,139,0.08)',
+                      border: '1px solid #1e293b',
+                      borderRadius: 10, padding: '8px 0',
+                      color: '#94a3b8', cursor: 'pointer', fontSize: 12,
+                      fontFamily: 'Outfit, sans-serif',
+                    }}
+                  >
+                    Ändra datum
+                  </button>
+                )}
+              </div>
+            </div>
           </>
         ) : (
           <div>
