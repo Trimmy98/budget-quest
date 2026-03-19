@@ -28,9 +28,14 @@
 | role | text | NULL | 'member' |
 | onboarding_complete | boolean | NULL | false |
 | created_at | timestamptz | NULL | now() |
+| starting_balance | numeric | NULL | — |
+| starting_balance_date | timestamptz | NULL | — |
+| savings_tracking_start | timestamptz | NULL | — |
 
 **Index:** PK `id`, INDEX `household_id`
 **FK:** `id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id)`
+
+**OBS:** `starting_balance` och `starting_balance_date` är cache-kolumner — källan till sanning är `balance_events`-tabellen. `savings_tracking_start` styr från vilket datum sparande beräknas.
 
 ---
 
@@ -195,6 +200,49 @@
 
 ---
 
+### balance_events
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| user_id | uuid | NOT NULL | — |
+| household_id | uuid | NOT NULL | — |
+| type | text | NOT NULL | — |
+| amount | numeric | NOT NULL | — |
+| note | text | NULL | — |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Check:** `type IN ('initial', 'adjustment', 'correction')`
+**Index:** PK `id`
+**FK:** `user_id → auth.users(id) ON DELETE CASCADE`, `household_id → households(id) ON DELETE CASCADE`
+
+`balance_events` är källan till sanning för startsaldo. Saldot beräknas som `SUM(amount)` över alla events. Typer:
+- `initial` — första insättningen av startsaldo
+- `adjustment` — manuell justering (+/−)
+- `correction` — korrigering till ett specifikt belopp (beräknad diff)
+
+---
+
+### weekly_reports
+
+| Kolumn | Typ | Nullable | Default |
+|--------|-----|----------|---------|
+| id | uuid | NOT NULL | gen_random_uuid() |
+| household_id | uuid | NOT NULL | — |
+| week_start | date | NOT NULL | — |
+| week_end | date | NOT NULL | — |
+| data | jsonb | NOT NULL | '{}' |
+| ai_comment | text | NULL | — |
+| created_at | timestamptz | NOT NULL | now() |
+
+**Unique:** `(household_id, week_start)`
+**Index:** PK `id`
+**FK:** `household_id → households(id) ON DELETE CASCADE`
+
+`data` JSONB innehåller: `total_spent`, `total_shared`, `total_personal`, `per_member`, `top_categories`, `debt_change`, `budget_status`, `vs_last_week`, `expense_count`, `avg_per_day`. `ai_comment` fylls i separat (via AI-analys).
+
+---
+
 ## RPC-funktioner
 
 ### add_xp(amount integer) → integer
@@ -322,11 +370,74 @@ Health check som jämför manuell skuld-beräkning med `calculate_debt()` RPC.
 - Returnerar: `{ ok: bool, household_id: uuid, diffs: [...], manual_check: [...] }`
 - Om `ok = true`: alla siffror matchar
 
+### get_my_balance() → jsonb
+
+Beräknar aktuellt saldo och sparande från `balance_events`. `VOLATILE SECURITY DEFINER`.
+
+**OBS:** Måste vara `VOLATILE` (inte `STABLE`) — PostgreSQL ignorerar tyst alla skrivningar i STABLE-funktioner.
+
+- Startsaldo = `SUM(balance_events.amount)` för inloggad användare
+- Startdatum = `MIN(balance_events.created_at)`
+- Inkomster: `month > to_char(sb_date, 'YYYY-MM')` (strikt efter saldo-månaden — saldo ÄR det faktiska banksaldot, inkomster redan inkluderade)
+- Utgifter: `created_at > sb_date` (bara loggade efter saldot sattes)
+- Delade utgifter delas med `mem_count`
+- **Sparande-tracking**: Beräknas från `COALESCE(savings_tracking_start, sb_date)`
+  - `savings_amount = income − expenses` (efter tracking-start)
+  - `savings_balance_at_start` = rekonstruerat saldo vid tracking-startdatum
+- Returnerar:
+  ```json
+  {
+    "starting_balance": 3053,
+    "starting_balance_date": "2026-03-18T...",
+    "income_since": 0,
+    "expenses_since": 245.50,
+    "shared_expenses_since": 120.25,
+    "personal_expenses_since": 125.25,
+    "current_balance": 2807.50,
+    "daily_data": [{ "date": "2026-03-18", "income": 0, "spent": 50, "balance": 3003 }, ...],
+    "events": [{ "id": "uuid", "type": "initial", "amount": 3053, "note": "...", "created_at": "..." }],
+    "adjustment_count": 0,
+    "savings_tracking_start": "2026-03-18T...",
+    "savings_period_income": 0,
+    "savings_period_expenses": 245.50,
+    "savings_amount": -245.50,
+    "savings_balance_at_start": 3053
+  }
+  ```
+- Returnerar `NULL` om inga `balance_events` finns (saldo ej satt)
+
+### generate_weekly_report(target_week_start date) → jsonb
+
+Genererar eller hämtar veckorapport för hushållet. `VOLATILE SECURITY DEFINER`.
+
+- `target_week_start` måste vara en måndag (valideras)
+- **Idempotent**: returnerar befintlig rapport om den redan finns
+- Beräknar per vecka:
+  - `total_spent`, `total_shared`, `total_personal`, `expense_count`, `avg_per_day`
+  - `per_member`: varje medlems `shared_paid` och `personal`
+  - `top_categories`: topp 5 kategorier (belopp)
+  - `debt_change`: skuldsaldo start/slut av veckan + betalningar
+  - `budget_status`: per-kategori budget vs spent (för aktuell månad t.o.m. veckans slut)
+  - `vs_last_week`: procentuell ändring, belopps-diff, riktning, största ökning/minskning per kategori
+- Sparar rapporten i `weekly_reports`-tabellen
+- Returnerar:
+  ```json
+  {
+    "id": "uuid",
+    "household_id": "uuid",
+    "week_start": "2026-03-10",
+    "week_end": "2026-03-16",
+    "data": { "total_spent": 1234, "per_member": [...], ... },
+    "ai_comment": null,
+    "created_at": "..."
+  }
+  ```
+
 ---
 
 ## RLS-policies
 
-Alla 11 tabeller har RLS aktiverat (33 policies totalt).
+Alla 13 tabeller har RLS aktiverat (38 policies totalt).
 
 | Tabell | Policy | Cmd | Villkor |
 |--------|--------|-----|---------|
@@ -363,6 +474,11 @@ Alla 11 tabeller har RLS aktiverat (33 policies totalt).
 | budget_defaults | budget_defaults_insert | INSERT | household_id = get_my_household_id() |
 | budget_defaults | budget_defaults_update | UPDATE | household_id = get_my_household_id() |
 | budget_defaults | budget_defaults_delete | DELETE | household_id = get_my_household_id() |
+| balance_events | balance_events_select | SELECT | user_id = auth.uid() |
+| balance_events | balance_events_insert | INSERT | user_id = auth.uid() |
+| balance_events | balance_events_delete | DELETE | user_id = auth.uid() |
+| weekly_reports | weekly_reports_select | SELECT | household_id = get_my_household_id() |
+| weekly_reports | weekly_reports_update | UPDATE | household_id = get_my_household_id() |
 
 ---
 
@@ -390,9 +506,30 @@ Tre tabbar: Utgifter, Statistik, Badges.
 - Grupperade utgifter (expanderbara i månads-vy)
 - Kategori- och person-filter med aktiva filter-pills
 
+### Personal (Mitt)
+
+Layout (uppifrån och ner):
+1. **Saldokort** — beräknat saldo, startsaldo, inkomst, utgifter (delade + personliga), SVG-linjegraf med daglig saldoutveckling
+2. **Sparande-kort** — visar +/− sedan sparstart, period-datum, inkomst−utgifter=sparande-uppdelning, "Nollställ sparande"-knapp
+3. **Personlig budget** — per-kategori progress bars (fika, kläder, hobby etc.)
+4. **Sparmål** — CRUD för personliga sparmål med deadline och progress
+
+**Saldograf:** SVG-baserad linjegraf med daglig data. Om `savings_tracking_start` finns renderas en gul streckad vertikal linje vid det datumet med "Sparstart"-etikett.
+
 ### Settings
 
 - Hushållsinfo + invite-kod
+- **Startsaldo-hantering:**
+  - Beräknat saldo-kort
+  - Event-historik (initial/adjustment/correction med typ-badges, tidsstämplar)
+  - Lägg till justering (+/−, med anteckning)
+  - Korrigera saldo (räknar ut diff automatiskt)
+  - Radera enskilda events (med bekräftelse)
+  - Återställ allt (raderar alla events, med bekräftelse)
+- **Sparande-tracking:**
+  - Visar tracking-startdatum
+  - Nollställ sparande (sätter ny startpunkt)
+  - Datumväljare för manuell ändring av startdatum
 - Månadsbudget-setup (per kategori, med defaults och kopiera-funktioner)
 - Gemensam budget (kategori-definitionen via `budgets`-tabellen)
 - Valutainställning
@@ -497,7 +634,7 @@ Baserat på sparkvot (savings rate):
 
 ## Testsvit
 
-7 testfiler, 34 tester:
+9 testfiler, 62 tester:
 
 | Fil | Tester | Beskrivning |
 |-----|--------|-------------|
@@ -508,6 +645,8 @@ Baserat på sparkvot (savings rate):
 | `useWeeklyChallenges.test.js` | 4 | Challenge-generering, completion |
 | `useDebtCalculation.test.js` | 7 | Skuldsaldo, betalningar, teckenbugg-regression |
 | `useBudgetStatus.test.js` | 7 | Budget-status, warning/over, daily_allowance, defaults |
+| `useBalance.test.js` | 18 | Saldoberäkning, events, sparande, dubbelräkning, justeringar |
+| `useWeeklyReport.test.js` | 10 | Veckorapport-generering, jämförelse, budget-status |
 
 ---
 

@@ -34,6 +34,7 @@ Miljövariabler i `.env` (ALDRIG committa denna):
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
 VITE_SENTRY_DSN=...          # Valfritt — lämna tomt för att stänga av Sentry
+VITE_ANTHROPIC_API_KEY=...   # Valfritt — för AI-kommentarer i veckorapporter
 ```
 
 ## Projektstruktur
@@ -55,16 +56,18 @@ src/
     useWeeklyChallenges.js  # Veckoutmaningar (3 slumpmässiga per vecka)
     useSavingsGoals.js      # Personliga sparmål (DB-backed, migrerar från localStorage)
     useBudgetStatus.js      # useBudgetStatus(month) + useMonthlyBudgets(month) — månadsbudget
+    useBalance.js           # Startsaldo, balance_events, sparande-tracking
+    useWeeklyReport.js      # Veckorapporter med AI-kommentarer
     useCurrency.js          # Valutasymbol
   components/
     auth/              # AuthPage, Onboarding, JoinPage
     dashboard/         # Dashboard (huvudvy med alla widgets)
     expenses/          # AddExpense (logga utgift/inkomst)
-    personal/          # Personal (personlig budget + sparmål)
+    personal/          # Personal (personlig budget + sparmål + saldo + sparande)
     quests/            # Quests (sparande-milstolpar)
     achievements/      # Achievements
     history/           # History (period-översikt med hushåll/mitt-toggle)
-    settings/          # Settings (budget, månadsbudget, hushåll)
+    settings/          # Settings (budget, månadsbudget, hushåll, startsaldo, sparande)
     shared/            # Header, BottomNav, Mascot, ProgressRing, ProgressBar, ErrorBoundary
 testutils/
   setup.js             # Vitest setup (jsdom, Testing Library matchers)
@@ -77,9 +80,9 @@ eslint.config.js       # ESLint flat config
 
 Se `SPEC.md` för fullständigt schema med kolumner, index, FK och RLS-policies.
 
-**Tabeller (11 st):**
+**Tabeller (13 st):**
 - `households` — hushåll med invite_code, admin_id, max_members
-- `profiles` — användarprofiler, kopplade till household
+- `profiles` — användarprofiler (+ starting_balance, starting_balance_date, savings_tracking_start)
 - `expenses` — utgifter (shared/personal), med `amount` (NOT NULL) och `paid_amount` (NOT NULL, default 0)
 - `income` — inkomster per månad
 - `budgets` — budgetkategorier (JSONB), updated_at (auto-trigger)
@@ -89,12 +92,54 @@ Se `SPEC.md` för fullständigt schema med kolumner, index, FK och RLS-policies.
 - `debt_payments` — betalningar mellan hushållsmedlemmar (from_user_id, to_user_id, amount, note)
 - `monthly_budgets` — månadsbudget per kategori (household_id, month, category, budget_amount)
 - `budget_defaults` — standardbudget per hushåll (household_id, defaults JSONB)
+- `balance_events` — saldo-händelser per användare (initial/adjustment/correction, amount, note)
+- `weekly_reports` — veckorapporter per hushåll (data JSONB, ai_comment)
 
-**RPC-funktioner (9 st):** `add_xp`, `update_streak`, `join_household`, `lookup_household_by_invite`, `register_debt_payment`, `update_debt_payment`, `calculate_debt`, `get_budget_status`, `get_my_household_id`
-
-**Verifieringsfunktioner (1 st):** `verify_debt_calculation` — health check som jämför manuell beräkning med `calculate_debt()` RPC
+**RPC-funktioner (13 st):** `add_xp`, `update_streak`, `join_household`, `lookup_household_by_invite`, `register_debt_payment`, `update_debt_payment`, `calculate_debt`, `get_budget_status`, `get_my_household_id`, `get_my_balance`, `generate_weekly_report`, `update_updated_at`, `verify_debt_calculation`
 
 ## Viktiga mönster och regler
+
+### Startsaldo och balance_events — source of truth
+
+Startsaldo representerar det **faktiska kontosaldot** vid en given tidpunkt. `balance_events`-tabellen är source of truth. `profiles.starting_balance` och `starting_balance_date` är **cache** som uppdateras av hooken.
+
+**balance_events typer:**
+- `initial` — första startsaldot ("jag har 3053€ just nu")
+- `adjustment` — manuell justering (+200€ "fick tillbaka från kompis", -150€ "betalade utanför appen")
+- `correction` — korrigering till ett specifikt belopp (beräknar diff automatiskt)
+
+**Saldo-formel (get_my_balance RPC):**
+```
+starting_balance = SUM(balance_events.amount)
+current_balance = starting_balance + income_since - expenses_since
+```
+
+**KRITISKT — dubbelräkningsregel:**
+- Startsaldot ÄR det faktiska kontosaldot — befintlig inkomst/utgifter är redan inbakade
+- `income_since`: bara månader **strikt efter** saldo-månaden (`month > to_char(sb_date, 'YYYY-MM')`)
+- `expenses_since`: bara utgifter **loggade efter** saldot sattes (`created_at > sb_date`)
+- Använd ALDRIG `>=` — det dubbelräknar befintlig aktivitet
+
+**useBalance hook:**
+- `addEvent(type, amount, note)` — skapa ny balance_event
+- `deleteEvent(id)` — radera en event (ångra)
+- `setStartingBalance(amount)` — skapar `initial` (första gången) eller `correction` (justerar till belopp)
+- `resetBalance()` — raderar alla events + profiles-cache
+- Realtime-subscriptions på `expenses`, `income`, `balance_events`
+
+### Sparande-tracking
+
+Sparande mäter hur mycket plus/minus användaren gått sedan en viss tidpunkt.
+
+- `profiles.savings_tracking_start` — när sparräknaren startades (null = fallback till starting_balance_date)
+- `savings_amount = savings_period_income - savings_period_expenses` (positivt = sparat)
+- `savings_balance_at_start` — beräknat saldo vid tracking-startdatumet
+- Nollställning: sätter `savings_tracking_start = now()`, sparande börjar om från 0
+
+**useBalance hook (sparande):**
+- `resetSavings()` — sätter savings_tracking_start = now()
+- `setSavingsDate(dateStr)` — manuellt datum
+- Returnerar: `savingsAmount`, `savingsBalanceAtStart`, `savingsTrackingStart`, `savingsPeriodIncome`, `savingsPeriodExpenses`
 
 ### XP och streaks — ALLTID via RPC
 
@@ -152,6 +197,10 @@ Månadsbudget sätts per kategori i `monthly_budgets`-tabellen. `budget_defaults
 - **History**: Budget vs faktiskt-bars i "Topp kategorier" med per-kategori progress bars. I "Mitt"-vy delas budgeten per antal medlemmar.
 - **AddExpense**: Flash-varning (3 sekunder) efter loggning när kategori >75% av budget. Separat från inline-varningen som visas medan man väljer kategori.
 
+### Veckorapporter
+
+`generate_weekly_report(target_week_start)` RPC beräknar veckodata. `useWeeklyReport` hook hanterar navigation och AI-kommentarer via Anthropic API (direct browser access). Dashboard visar veckorapport-kort med navigation.
+
 ### Nya FK:s — använd ON DELETE CASCADE
 
 Alla nya foreign keys som pekar på `auth.users` eller `households` ska ha `ON DELETE CASCADE`.
@@ -181,11 +230,30 @@ Utgifter-tabben har:
 - **Filter**: kategori + person-dropdown med aktiva filter-pills
 - **Budget vs faktiskt**: Per-kategori progress bars i "Topp kategorier" (data från `useBudgetStatus`)
 
+### Dashboard-layout
+
+Layout uppifrån och ner:
+1. **Level & XP** — ProgressRing, level-namn, XP-bar
+2. **Streak** — nuvarande streak, bästa streak
+3. **Ekonom-analys** — månadsbetyg (S/A/B/C/D), inkomst vs utgifter, sparkvot
+4. **Veckorapport** — navigerbar (← →), totalt spenderat, jämförelse, per-medlem, AI-kommentar
+5. **Budget burn rate** — totalt kvar, daglig budget, total progress bar, varningar, per-kategori bars
+6. **Pengapusslet** (om >1 medlem) — skuld-kort, betalningshistorik, gemensamma utgifter
+7. **Leaderboard** — alla medlemmar rankade efter XP
+
+### Personal-vy ("Mitt")
+
+Layout uppifrån och ner:
+1. **Saldo-kort** — kontosaldo (stort, grönt/rött), startsaldo-info, inkomst/utgifter, varning vid negativt, inline SVG-graf med prognoslinje, uppdelning gemensamt/personligt
+2. **Sparande-kort** — sparat belopp (↑ grönt / ↓ rött), period, inkomst−utgifter=sparande, nollställ-knapp
+3. **Graf-markering** — gul streckad linje vid savings_tracking_start ("Sparstart")
+4. **Setup** (om inget saldo) — formulär för att sätta startsaldo
+
 ### RLS (Row Level Security)
 
-Alla 11 tabeller har RLS aktiverat. Hjälpfunktionen `get_my_household_id()` returnerar inloggad användares household_id.
+Alla 13 tabeller har RLS aktiverat (38 policies totalt). Hjälpfunktionen `get_my_household_id()` returnerar inloggad användares household_id.
 
-- **households**: SELECT för eget hushåll + admin, INSERT/UPDATE bara admin
+- **households**: SELECT för eget hushåll + admin, INSERT/UPDATE bara admin (multi-admin via profiles.role)
 - **profiles**: SELECT för eget hushåll, INSERT/UPDATE bara egen profil
 - **expenses**: SELECT hela hushållet, INSERT bara egen user_id, DELETE egen + admin, UPDATE egen + shared i hushållet
 - **income**: Allt scoped till egen user_id + household_id
@@ -196,23 +264,25 @@ Alla 11 tabeller har RLS aktiverat. Hjälpfunktionen `get_my_household_id()` ret
 - **debt_payments**: SELECT hela hushållet, INSERT om from/to = auth.uid(), DELETE bara from_user_id = auth.uid()
 - **monthly_budgets**: SELECT/INSERT/UPDATE/DELETE scoped till household_id = get_my_household_id()
 - **budget_defaults**: SELECT/INSERT/UPDATE/DELETE scoped till household_id = get_my_household_id()
-
-**OBS:** `households_select_by_invite`-policyn finns inte längre — invite-lookup görs via `lookup_household_by_invite` RPC istället.
+- **balance_events**: SELECT/INSERT/DELETE scoped till user_id = auth.uid()
+- **weekly_reports**: SELECT/UPDATE scoped till household_id = get_my_household_id()
 
 ### Budgets-policies
 
-Bara `admin`-rollen kan INSERT/UPDATE budgets (kategori-definitionen). Månadsbudget (`monthly_budgets`) och budget-defaults (`budget_defaults`) kan hanteras av alla hushållsmedlemmar. Debt payments registreras via `register_debt_payment` RPC (kringgår RLS korrekt).
+Bara `admin`-rollen kan INSERT/UPDATE budgets (kategori-definitionen). Månadsbudget (`monthly_budgets`) och budget-defaults (`budget_defaults`) kan hanteras av alla hushållsmedlemmar. Debt payments registreras via `register_debt_payment` RPC (kringgår RLS korrekt). Multi-admin stöds — flera användare kan ha `profiles.role = 'admin'`.
 
 ## Testsvit
 
-7 testfiler, 34 tester totalt:
-- `JoinPage.test.jsx` — invite-flöde
-- `AddExpense.test.jsx` — utgiftsloggning
-- `useGamification.test.js` — XP, streaks, achievements
-- `useSavingsGoals.test.js` — sparmål CRUD
-- `useWeeklyChallenges.test.js` — challenge-logik
-- `useDebtCalculation.test.js` — skuldsaldo-beräkning (7 tester), regressionstest för teckenbugg i `payment_adjustment`
-- `useBudgetStatus.test.js` — budget-logik (7 tester): spent per kategori, warning/over_budget status, daily_allowance, defaults-kopiering, Dashboard-färgkodning
+9 testfiler, 62 tester totalt:
+- `JoinPage.test.jsx` — invite-flöde (3 tester)
+- `AddExpense.test.jsx` — utgiftsloggning (5 tester)
+- `useGamification.test.js` — XP, streaks, achievements (5 tester)
+- `useSavingsGoals.test.js` — sparmål CRUD (3 tester)
+- `useWeeklyChallenges.test.js` — challenge-logik (4 tester)
+- `useDebtCalculation.test.js` — skuldsaldo-beräkning (7 tester)
+- `useBudgetStatus.test.js` — budget-logik (7 tester)
+- `useBalance.test.js` — saldo, balance_events, sparande (18 tester)
+- `useWeeklyReport.test.js` — veckorapport-beräkningar (10 tester)
 
 ## Kända fallgropar
 
@@ -221,6 +291,8 @@ Bara `admin`-rollen kan INSERT/UPDATE budgets (kategori-definitionen). Månadsbu
 - **Weekly challenges race condition**: `loadOrCreateWeek` hanterar `23505` (unique violation) — om två tabbar skapar samtidigt vinner en och den andra hämtar den existerande.
 - **AuthContext retry-logik**: `fetchProfile` har retry (3 försök med backoff). Skiljer på PGRST116 (genuint ny användare, ingen retry) och nätverksfel (retry). Sätter bara `loading=false` vid sista försöket eller framgång.
 - **calculate_debt teckenbugg (fixad)**: `payment_adjustment` var inverterad (`received - sent`). Fixad till `sent - received`. Regressionstest i `useDebtCalculation.test.js`.
+- **get_my_balance STABLE-bugg (fixad)**: RPC:n var markerad `STABLE` men gjorde en `UPDATE` — PostgreSQL tillåter inte skrivningar i STABLE-funktioner. Fixad genom att ta bort STABLE och flytta cache-logik till hooken.
+- **Tester och produktionsdata**: Tester/verifieringar ska **ALDRIG** ändra produktionsdata. Använd enbart SELECT-queries för verifiering. Unit-tester mockar Supabase-anrop.
 
 ## Deploy
 

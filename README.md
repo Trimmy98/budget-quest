@@ -76,6 +76,8 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 - **Månadsbudget**: Sätt budget per kategori med live burn rate. Varningar vid >75% och >100%. Daglig budget-beräkning.
 - **Budget-defaults**: Spara standardbudget som auto-kopieras till nya månader
 - **Inkomster**: Logga månadsinkomster (lön, sidoinkomst, etc.)
+- **Startsaldo**: Ange faktiskt banksaldo — appen beräknar ditt saldo löpande. Historik med justeringar och korrigeringar.
+- **Sparande-tracking**: Se hur mycket du sparar/spenderar sedan en valbar startpunkt. Visar inkomst − utgifter med graf-markör.
 
 ### Pengapusslet (skuldsaldo)
 - **Server-side skuldsaldoberäkning** via `calculate_debt` RPC — single source of truth
@@ -101,8 +103,8 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 - **History**: Period-översikt (dag/vecka/månad) med hushåll/mitt-perspektiv, jämförelse, budget vs faktiskt, filter
 - **Quest Map**: Sparande-milstolpar
 - **Achievements**: 12 upplåsbara badges
-- **Personal**: Personlig budget + sparmål med deadline
-- **Settings**: Månadsbudget-setup, kategori-definition, hushållsinställningar
+- **Personal (Mitt)**: Saldokort med SVG-graf, sparande-tracking, personlig budget + sparmål
+- **Settings**: Startsaldo-hantering med event-historik, sparande-tracking, månadsbudget, kategori-definition, hushållsinställningar
 
 ### Övrigt
 - **Auth**: Registrering + inloggning via Supabase Auth
@@ -114,7 +116,7 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 | Tabell | Beskrivning |
 |--------|-------------|
 | `households` | Hushållsinfo + invite codes |
-| `profiles` | Användarprofiler länkade till hushåll |
+| `profiles` | Användarprofiler länkade till hushåll (inkl. startsaldo-cache, sparande-start) |
 | `expenses` | Utgifter (shared/personal) med amount + paid_amount |
 | `income` | Månadsinkomster per person |
 | `budgets` | Budgetkategorier per hushåll (JSONB) |
@@ -124,12 +126,14 @@ Lägg till miljövariablerna i Vercel dashboard under **Settings → Environment
 | `debt_payments` | Betalningar mellan hushållsmedlemmar |
 | `monthly_budgets` | Månadsbudget per kategori |
 | `budget_defaults` | Standardbudget per hushåll |
+| `balance_events` | Saldobokföring (initial/adjustment/correction) |
+| `weekly_reports` | Veckorapporter per hushåll (data + AI-kommentar) |
 
-**9 RPC-funktioner** + 1 verifieringsfunktion. Se `SPEC.md` för fullständigt schema, RPC-specs och RLS-policies.
+**11 RPC-funktioner** + 2 hjälp/verifieringsfunktioner. Se `SPEC.md` för fullständigt schema, RPC-specs och RLS-policies.
 
 ## Testsvit
 
-7 testfiler, 34 tester: join-flöde, utgiftsloggning, gamification, sparmål, veckoutmaningar, skuldsaldo, budget-status.
+9 testfiler, 62 tester: join-flöde, utgiftsloggning, gamification, sparmål, veckoutmaningar, skuldsaldo, budget-status, saldoberäkning, veckorapporter.
 
 ```bash
 npm run test:run
